@@ -160,13 +160,14 @@ def run(camera_index=0, width=640, height=480,
         # ── Output ────────────────────────────────────────────────────────
         if web_stream:
             stream_frame[0] = frame.copy()
-
-        cv2.imshow("Vision Detection", frame)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+        else:
+            cv2.imshow("Vision Detection", frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
 
     cap.release()
-    cv2.destroyAllWindows()
+    if not web_stream:
+        cv2.destroyAllWindows()
     pose.close()
     hands.close()
 
