@@ -28,6 +28,11 @@ python3 -m venv "$VENV_DIR"
 source "$VENV_DIR/bin/activate"
 
 pip install --upgrade pip --quiet
+
+# Install CPU-only PyTorch FIRST — prevents pip from pulling in CUDA/nvidia packages
+echo "  Installing CPU-only PyTorch …"
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet
+
 pip install -r "$SCRIPT_DIR/requirements.txt"
 
 echo "[4/4] Pre-downloading YOLOv8n weights …"

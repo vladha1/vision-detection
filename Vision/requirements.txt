@@ -1,3 +1,5 @@
+# PyTorch CPU-only must be installed before this file via install.sh
+# (pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu)
 opencv-python>=4.8.0
 mediapipe>=0.10.9
 ultralytics>=8.1.0
