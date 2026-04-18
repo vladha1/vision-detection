@@ -58,7 +58,7 @@ def run(camera_index=0, width=320, height=240,
                            min_tracking_confidence=0.5,
                            model_complexity=0)
 
-    logger = DetectionLogger(log_file=log_file)
+    logger = DetectionLogger(log_dir=log_file)
 
     if web:
         from dashboard import start_dashboard
@@ -141,7 +141,7 @@ if __name__ == "__main__":
     ap.add_argument("--no-hands",      action="store_true")
     ap.add_argument("--web",           action="store_true")
     ap.add_argument("--port",          type=int,   default=5000)
-    ap.add_argument("--log",           default="detections.jsonl")
+    ap.add_argument("--log",           default="logs")
     args = ap.parse_args()
 
     run(camera_index=args.camera, width=args.width, height=args.height,
