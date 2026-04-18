@@ -1,0 +1,69 @@
+# Windows system files
+NTUSER.DAT*
+ntuser.dat*
+ntuser.ini
+
+# User profile dirs (not for version control)
+AppData/
+Desktop/
+Documents/
+Downloads/
+Favorites/
+Music/
+Videos/
+Pictures/
+3D Objects/
+Saved Games/
+Searches/
+OneDrive/
+iCloudDrive/
+iCloudPhotos/
+
+# Tool/app configs (keep local)
+.aws/
+.ssh/
+.conda/
+.config/
+.cache/
+.local/
+.cursor/
+.cursor-sandbox/
+.vscode/
+.copilot/
+.gemini/
+.amplify/
+.arduino-create/
+.arduinoIDE/
+.cloudflared/
+.continuum/
+.condarc
+.ipynb_checkpoints/
+.ipython/
+.jupyter/
+.matplotlib/
+.pm2/
+.sbx-denybin/
+.sonic-pi/
+.streamlit/
+.wdm/
+.claude/
+.claude.json
+.claude.json.backup
+.gitconfig
+.lesshst
+ecosystem.config.cjs
+edge-impulse-config.json
+aqbanking/
+captcha/
+shairport-sync.conf
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# YOLO weights (large binary, download on device)
+*.pt
