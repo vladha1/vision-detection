@@ -219,7 +219,12 @@ const es = new EventSource('/stream');
 es.addEventListener('config', e => {
   const cfg = JSON.parse(e.data);
   gameRadius = cfg.radius;
-  rings      = cfg.rings;   // [{mult, pts, label}, ...]
+  rings      = cfg.rings;
+  if (cfg.total_shots) {
+    document.getElementById('s-shots').textContent = cfg.total_shots;
+    document.getElementById('s-score').textContent = cfg.total_score;
+    shotCount = cfg.total_shots;
+  }
   drawBoard();
 });
 
@@ -321,13 +326,17 @@ def start_dashboard(logger, port: int = 5001, game_radius: int = 30, rings=None)
     @app.route("/stream")
     def stream():
         def generate():
-            # Config first so client can draw the board immediately
-            yield f"event: config\ndata: {config_payload}\n\n"
+            # Config + current totals so header is correct before history arrives
+            cfg = json.loads(config_payload)
+            cfg["total_score"] = logger.running_score
+            cfg["total_shots"] = logger.total_shots
+            yield f"event: config\ndata: {json.dumps(cfg)}\n\n"
 
-            # Shot history
+            # Shot history — running_score anchored to true cumulative total
             history = logger.recent(50)
             if history:
-                running = 0
+                base = logger.running_score - sum(e.get("score", 0) for e in history)
+                running = base
                 history_out = []
                 for e in history:
                     running += e.get("score", 0)
