@@ -23,6 +23,10 @@ header { display: flex; align-items: center; gap: 2rem; padding: 0.6rem 1.2rem;
 h1 { color: #f90; font-size: 1.4rem; }
 .stat .val { font-size: 1.6rem; font-weight: bold; color: #0f9; line-height: 1; }
 .stat .lbl { font-size: 0.65rem; color: #666; margin-top: 2px; }
+#reset-btn { margin-left: auto; background: #5a0000; color: #eee; border: 1px solid #800;
+             padding: 0.35rem 1.1rem; font-family: monospace; font-size: 0.85rem;
+             border-radius: 4px; cursor: pointer; }
+#reset-btn:hover { background: #aa0000; border-color: #c00; }
 
 main { display: flex; flex: 1; overflow: hidden; }
 
@@ -55,6 +59,7 @@ tr.miss  .pts  { color: #444; }
   <div class="stat"><div class="val" id="s-score">0</div><div class="lbl">SCORE</div></div>
   <div class="stat"><div class="val" id="s-last" style="font-size:1rem">—</div>
                     <div class="lbl">LAST SHOT</div></div>
+  <button id="reset-btn" onclick="doReset()">Reset</button>
 </header>
 <main>
   <div id="board-wrap"><canvas id="board" width="420" height="420"></canvas></div>
@@ -273,6 +278,21 @@ function prependRow(sh, seq, animate) {
   if (animate) setTimeout(() => tr.classList.remove('new'), 1000);
 }
 
+es.addEventListener('reset', () => {
+  shotCount = 0;
+  allShots  = [];
+  document.getElementById('s-shots').textContent = '0';
+  document.getElementById('s-score').textContent = '0';
+  document.getElementById('s-last').textContent  = '—';
+  document.getElementById('tbody').innerHTML = '';
+  drawBoard();
+});
+
+function doReset() {
+  if (!confirm('Clear the board and reset scores?')) return;
+  fetch('/reset', { method: 'POST' });
+}
+
 // Draw empty board while waiting for config
 drawBoard();
 </script>
@@ -292,6 +312,11 @@ def start_dashboard(logger, port: int = 5001, game_radius: int = 30, rings=None)
     @app.route("/")
     def index():
         return render_template_string(_HTML)
+
+    @app.route("/reset", methods=["POST"])
+    def reset():
+        logger.reset()
+        return "", 204
 
     @app.route("/stream")
     def stream():
@@ -317,8 +342,11 @@ def start_dashboard(logger, port: int = 5001, game_radius: int = 30, rings=None)
                 while True:
                     if q:
                         event = dict(q.popleft())
-                        event["running_score"] = logger.running_score
-                        yield f"event: shot\ndata: {json.dumps(event)}\n\n"
+                        if event.get("_reset"):
+                            yield "event: reset\ndata: {}\n\n"
+                        else:
+                            event["running_score"] = logger.running_score
+                            yield f"event: shot\ndata: {json.dumps(event)}\n\n"
                     else:
                         yield ": keep-alive\n\n"
                         time.sleep(5)

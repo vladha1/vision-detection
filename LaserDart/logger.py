@@ -69,6 +69,15 @@ class ShotLogger:
             for q in self._subscribers:
                 q.append(event)
 
+    def reset(self):
+        with self._lock:
+            self._buf.clear()
+            self.total_shots   = 0
+            self.running_score = 0
+            for q in self._subscribers:
+                q.clear()
+                q.append({"_reset": True})
+
     def recent(self, n: int = 50) -> list:
         with self._lock:
             return list(self._buf)[-n:]
