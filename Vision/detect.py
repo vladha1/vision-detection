@@ -120,8 +120,11 @@ def run(camera_index=0, width=320, height=240,
 
     # ── Game mode setup ───────────────────────────────────────────────────────
     game_target = game_radius = game_fh = None
-    laser_was_visible = shot_registered = False
+    laser_was_visible = False
+    first_dot  = None
+    max_drift  = 0.0
     total_shots = running_score = 0
+    DRAG_THRESHOLD = 20   # pixels
     if game == "ceiling":
         calib_path = game_calib or "LaserDart/ceiling_calibration.json"
         game_target, game_radius = _load_game_calib(calib_path)
@@ -201,26 +204,31 @@ def run(camera_index=0, width=320, height=240,
             dot = _detect_laser(frame, color=laser_color)
             laser_visible = dot is not None
 
-            if not laser_visible:
-                laser_was_visible = False
-                shot_registered   = False
-            elif not laser_was_visible and not shot_registered:
-                # Laser appeared fresh — valid shot; score on first frame (blocks drag-in)
-                pts, label, dist = _score_ceiling(dot, game_target, game_radius)
-                total_shots   += 1
-                running_score += pts
-                game_fh.write(json.dumps({
-                    "timestamp":   time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "pixel":       list(dot),
-                    "distance_px": dist,
-                    "score":       pts,
-                    "label":       label,
-                    "running":     running_score,
-                }) + "\n")
-                print(f"[SHOT]  {label:<12}  {pts:>3} pts  "
-                      f"dist={dist:.0f}px  (running: {running_score})")
-                shot_registered = True
-            # laser visible + already scored → held/dragged → silently ignored
+            if laser_visible and not laser_was_visible:
+                first_dot = dot
+                max_drift = 0.0
+            elif laser_visible and laser_was_visible and first_dot:
+                drift = math.hypot(dot[0] - first_dot[0], dot[1] - first_dot[1])
+                max_drift = max(max_drift, drift)
+            elif not laser_visible and laser_was_visible and first_dot:
+                if max_drift <= DRAG_THRESHOLD:
+                    pts, label, dist = _score_ceiling(first_dot, game_target, game_radius)
+                    total_shots   += 1
+                    running_score += pts
+                    game_fh.write(json.dumps({
+                        "timestamp":   time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "pixel":       list(first_dot),
+                        "distance_px": dist,
+                        "score":       pts,
+                        "label":       label,
+                        "running":     running_score,
+                    }) + "\n")
+                    print(f"[SHOT]  {label:<12}  {pts:>3} pts  "
+                          f"dist={dist:.0f}px  (running: {running_score})")
+                else:
+                    print(f"[DRAG]  Ignored — {max_drift:.0f}px movement")
+                first_dot = None
+                max_drift = 0.0
 
             laser_was_visible = laser_visible
 

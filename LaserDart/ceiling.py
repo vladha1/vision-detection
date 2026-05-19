@@ -173,6 +173,7 @@ def play(
     web: bool = False,
     port: int = 5001,
     log_dir: str = "dart_logs",
+    drag_threshold: int = 20,
 ):
     target, radius = _load_calibration()
     logger = ShotLogger(log_dir=log_dir)
@@ -186,24 +187,24 @@ def play(
     if not cap.isOpened():
         sys.exit(f"[ERROR] Cannot open camera {camera_index}")
 
-    print(f"[PLAY] Target {target}, ring radius={radius}px, laser={color}")
-    print("[PLAY] Anti-cheat: snap-on only — no drag-in, no hold. Press q to quit.")
+    print(f"[PLAY] Target {target}, radius={radius}px, laser={color}, "
+          f"drag_threshold={drag_threshold}px")
+    print("[PLAY] Snap the beam on and off — drags ignored. Press q to quit.")
 
     # ── Anti-cheat state machine ──────────────────────────────────────────────
     #
-    #   IDLE          laser absent — ready for next shot
-    #   SCORED        shot registered this appearance — waiting for laser to leave
+    # Score is registered when the laser turns OFF, not when it turns ON.
+    # While the laser is visible, we track max drift from the entry position.
+    # If drift > drag_threshold → drag → discard.
+    # If drift <= drag_threshold → valid snap → score at entry position.
     #
-    # Transition IDLE → SCORED : laser appears from absent → score immediately
-    # Transition SCORED → IDLE : laser disappears → reset
-    # Staying SCORED           : laser still visible after scoring → ignore (no hold)
-    # Drag prevention          : because we score on the FIRST frame the dot appears
-    #                            (not where it ends up), sliding the beam onto the
-    #                            target scores the position where it first became
-    #                            visible, not the target — natural penalty for dragging.
+    # This means: turning the laser on, sliding it to the target, then off = drag.
+    # Only a still snap (aim off-camera, snap on/off over target) scores.
 
     laser_was_visible = False
-    shot_registered   = False
+    first_dot  = None   # position when laser first appeared this shot
+    max_drift  = 0.0    # max pixel movement from first_dot while visible
+    last_was_drag = False  # for display feedback
 
     while True:
         ok, frame = cap.read()
@@ -213,27 +214,38 @@ def play(
         dot           = detect_laser(frame, color=color)
         laser_visible = dot is not None
 
-        if not laser_visible:
-            laser_was_visible = False
-            shot_registered   = False
+        if laser_visible and not laser_was_visible:
+            # Laser just appeared — start tracking
+            first_dot = dot
+            max_drift = 0.0
+            last_was_drag = False
 
-        elif not laser_was_visible and not shot_registered:
-            # Fresh appearance — valid shot
-            pts, label, dist = score_hit(dot, target, radius)
-            event = {
-                "timestamp":   time.strftime("%Y-%m-%d %H:%M:%S"),
-                "pixel":       list(dot),
-                "offset_px":   [dot[0] - target[0], dot[1] - target[1]],
-                "distance_px": dist,
-                "score":       pts,
-                "label":       label,
-            }
-            logger.log(event)
-            print(f"[SHOT]  {label:<12}  {pts:>3} pts  "
-                  f"dist={dist:.0f}px  (running: {logger.running_score})")
-            shot_registered = True
+        elif laser_visible and laser_was_visible and first_dot:
+            # Still visible — measure drift from entry point
+            drift = math.hypot(dot[0] - first_dot[0], dot[1] - first_dot[1])
+            max_drift = max(max_drift, drift)
 
-        # laser visible + already scored → held/dragged → silently ignored
+        elif not laser_visible and laser_was_visible and first_dot:
+            # Laser just turned off — evaluate the shot
+            if max_drift <= drag_threshold:
+                pts, label, dist = score_hit(first_dot, target, radius)
+                event = {
+                    "timestamp":   time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "pixel":       list(first_dot),
+                    "offset_px":   [first_dot[0] - target[0], first_dot[1] - target[1]],
+                    "distance_px": dist,
+                    "score":       pts,
+                    "label":       label,
+                }
+                logger.log(event)
+                print(f"[SHOT]  {label:<12}  {pts:>3} pts  "
+                      f"dist={dist:.0f}px  (running: {logger.running_score})")
+            else:
+                print(f"[DRAG]  Ignored — {max_drift:.0f}px movement "
+                      f"(limit: {drag_threshold}px)")
+                last_was_drag = True
+            first_dot = None
+            max_drift = 0.0
 
         laser_was_visible = laser_visible
 
@@ -246,12 +258,16 @@ def play(
             cv2.circle(display, (tx, ty), 5, (0, 0, 255), -1)
 
             if dot:
-                dot_colour = (0, 80, 80) if shot_registered else (0, 255, 255)
-                cv2.circle(display, dot, 10, dot_colour, 2)
+                # Threshold ring around entry point so player can see allowed wobble
+                if first_dot:
+                    cv2.circle(display, first_dot, drag_threshold, (60, 60, 200), 1)
+                drift_color = (0, 80, 200) if max_drift > drag_threshold else (0, 255, 255)
+                cv2.circle(display, dot, 10, drift_color, 2)
                 cv2.circle(display, dot,  2, (255, 255, 255), -1)
-                if shot_registered:
-                    cv2.putText(display, "RELEASE TO RESET", (dot[0] + 12, dot[1]),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 80, 80), 1)
+
+            if last_was_drag:
+                cv2.putText(display, "DRAG — invalid", (10, 55),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 60, 220), 2)
 
             cv2.putText(display,
                         f"Shots: {logger.total_shots}   Score: {logger.running_score}",
@@ -296,6 +312,8 @@ if __name__ == "__main__":
     pl.add_argument("--web",           action="store_true")
     pl.add_argument("--port",          type=int,  default=5001)
     pl.add_argument("--log",           default="dart_logs")
+    pl.add_argument("--drag",          type=int,  default=20,
+                    help="Max pixel movement allowed for a valid shot (default: 20)")
 
     args = ap.parse_args()
     if args.mode == "calibrate":
@@ -310,4 +328,5 @@ if __name__ == "__main__":
             web=args.web,
             port=args.port,
             log_dir=args.log,
+            drag_threshold=args.drag,
         )
