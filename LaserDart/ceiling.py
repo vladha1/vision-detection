@@ -47,11 +47,27 @@ def _on_click(event, x, y, flags, param):
         print(f"  Target centre set: ({x}, {y})")
 
 
-def calibrate(camera_index: int = 0):
+def calibrate(camera_index: int = 0, headless_target: str = None, headless_radius: int = None):
     """
-    Show live camera feed.
-    Click the centre of the target; use +/- to size the scoring rings; press s to save.
+    Two modes:
+      GUI      — opens camera feed, click the target centre, +/- to size rings, s to save.
+      Headless — pass --target x,y and --radius N; saves without opening a window.
+                 Use this over SSH where no display is available.
     """
+    if headless_target:
+        try:
+            x, y = [int(v.strip()) for v in headless_target.split(",")]
+        except ValueError:
+            sys.exit("[ERROR] --target must be x,y  e.g. --target 320,240")
+        radius = headless_radius or 30
+        with open(CALIB_FILE, "w") as f:
+            json.dump({"target": [x, y], "radius": radius}, f, indent=2)
+        print(f"[CALIBRATE] Saved headless → {CALIB_FILE}")
+        print(f"  target=({x},{y})  radius={radius}px")
+        print("  Tip: grab target pixel coords from a snapshot:")
+        print("  python ceiling.py snapshot  →  saves ceiling_snapshot.jpg")
+        return
+
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
         sys.exit(f"[ERROR] Cannot open camera {camera_index}")
@@ -62,7 +78,7 @@ def calibrate(camera_index: int = 0):
     cv2.namedWindow("Calibrate Ceiling")
     cv2.setMouseCallback("Calibrate Ceiling", _on_click)
 
-    radius = 30   # starting ring size in pixels — tune with +/-
+    radius = 30
 
     while True:
         ok, frame = cap.read()
@@ -103,6 +119,23 @@ def calibrate(camera_index: int = 0):
 
     cap.release()
     cv2.destroyAllWindows()
+
+
+def snapshot(camera_index: int = 0, out: str = "ceiling_snapshot.jpg"):
+    """Grab one frame and save it as a JPEG — open it to find target pixel coords."""
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        sys.exit(f"[ERROR] Cannot open camera {camera_index}")
+    for _ in range(10):          # let auto-exposure settle
+        cap.read()
+    ok, frame = cap.read()
+    cap.release()
+    if not ok:
+        sys.exit("[ERROR] Could not read frame")
+    cv2.imwrite(out, frame)
+    print(f"[SNAPSHOT] Saved → {out}  ({frame.shape[1]}×{frame.shape[0]})")
+    print("  Open it, find the smoke detector centre pixel, then run:")
+    print("  python ceiling.py calibrate --target x,y --radius 30")
 
 
 def _load_calibration() -> tuple[tuple[int, int], int]:
@@ -202,13 +235,11 @@ def play(
         if show:
             display = frame.copy()
 
-            # Scoring rings overlay
             tx, ty = int(target[0]), int(target[1])
             for mult, pts, _ in RINGS:
                 cv2.circle(display, (tx, ty), int(radius * mult), (0, 180, 255), 1)
             cv2.circle(display, (tx, ty), 5, (0, 0, 255), -1)
 
-            # Laser dot
             if dot:
                 dot_colour = (0, 80, 80) if shot_registered else (0, 255, 255)
                 cv2.circle(display, dot, 10, dot_colour, 2)
@@ -220,10 +251,16 @@ def play(
             cv2.putText(display,
                         f"Shots: {logger.total_shots}   Score: {logger.running_score}",
                         (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 220, 0), 2)
-            cv2.imshow("Ceiling Target", display)
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+            try:
+                cv2.imshow("Ceiling Target", display)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+            except cv2.error:
+                # No display available — fall back to headless silently
+                show = False
+        else:
+            # Headless: only exit via Ctrl+C
+            pass
 
     cap.release()
     cv2.destroyAllWindows()
@@ -235,8 +272,16 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Ceiling target laser accuracy game")
     sub = ap.add_subparsers(dest="mode", required=True)
 
-    cal = sub.add_parser("calibrate", help="Click the target centre and set ring size")
-    cal.add_argument("-c", "--camera", type=int, default=0)
+    cal = sub.add_parser("calibrate", help="Set target centre and ring size")
+    cal.add_argument("-c", "--camera",   type=int, default=0)
+    cal.add_argument("--target",         default=None,
+                     help="Headless: pixel coords of target centre, e.g. 320,240")
+    cal.add_argument("--radius",         type=int, default=30,
+                     help="Ring base radius in pixels (default: 30)")
+
+    snap = sub.add_parser("snapshot", help="Save one camera frame to find target coords")
+    snap.add_argument("-c", "--camera",  type=int, default=0)
+    snap.add_argument("-o", "--out",     default="ceiling_snapshot.jpg")
 
     pl = sub.add_parser("play", help="Run the game")
     pl.add_argument("-c", "--camera",  type=int,  default=0)
@@ -249,7 +294,9 @@ if __name__ == "__main__":
 
     args = ap.parse_args()
     if args.mode == "calibrate":
-        calibrate(args.camera)
+        calibrate(args.camera, headless_target=args.target, headless_radius=args.radius)
+    elif args.mode == "snapshot":
+        snapshot(args.camera, out=args.out)
     else:
         play(
             camera_index=args.camera,
