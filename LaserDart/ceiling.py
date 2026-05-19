@@ -28,11 +28,15 @@ CALIB_FILE = "ceiling_calibration.json"
 # Scoring rings — (radius_multiplier, points, label)
 # Distances are multiples of the configured target_radius
 RINGS = [
-    (0.5,  50, "Bullseye"),
-    (1.0,  40, "On Target"),
-    (2.0,  25, "Close"),
-    (4.0,  10, "Near"),
-    (8.0,   5, "Far"),
+    (0.3,  100, "Bullseye"),
+    (0.6,   85, "Inner"),
+    (1.0,   70, "On Target"),
+    (1.5,   55, "Close"),
+    (2.5,   40, "Good"),
+    (3.5,   25, "Okay"),
+    (5.0,   15, "Near"),
+    (7.0,    8, "Far"),
+    (10.0,   3, "Out"),
 ]
 
 # ── Calibration ───────────────────────────────────────────────────────────────
@@ -175,7 +179,7 @@ def play(
 
     if web:
         from dashboard import start_dashboard
-        start_dashboard(logger, port=port)
+        start_dashboard(logger, port=port, game_radius=radius, rings=RINGS)
         print(f"[INFO] Dashboard → http://0.0.0.0:{port}")
 
     cap = cv2.VideoCapture(camera_index)
@@ -219,6 +223,7 @@ def play(
             event = {
                 "timestamp":   time.strftime("%Y-%m-%d %H:%M:%S"),
                 "pixel":       list(dot),
+                "offset_px":   [dot[0] - target[0], dot[1] - target[1]],
                 "distance_px": dist,
                 "score":       pts,
                 "label":       label,
