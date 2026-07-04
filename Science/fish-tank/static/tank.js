@@ -11,6 +11,9 @@ const FLEE_FORCE = 900;
 const EDGE_MARGIN = 80;
 const FISH_LENGTH = 90;
 const WATER_COLOR = '#0a2846';
+const WANDER_SWAY_FREQ = 0.6;   // radians/sec - speed of the side-to-side sway
+const WANDER_SWAY_AMOUNT = 0.9; // radians - how wide the sway is
+const MAX_TURN_RATE = Math.PI * 1.4; // radians/sec - caps how fast the sprite can visually turn
 
 let W = window.innerWidth;
 let H = window.innerHeight;
@@ -87,7 +90,8 @@ class Fish {
     };
     const a = Math.random() * Math.PI * 2;
     this.vel = { x: Math.cos(a), y: Math.sin(a) };
-    this.wanderAngle = 0;
+    this.heading = a;
+    this.wanderPhase = Math.random() * Math.PI * 2;
     this.state = 'wander';
     this.reactUntil = 0;
   }
@@ -106,10 +110,10 @@ class Fish {
     return scale(dir, FLEE_FORCE * (1 - Math.min(d, SEEK_RADIUS) / SEEK_RADIUS));
   }
 
-  wanderForce() {
-    this.wanderAngle += (Math.random() - 0.5);
+  wanderForce(now) {
+    const sway = Math.sin(now * WANDER_SWAY_FREQ + this.wanderPhase) * WANDER_SWAY_AMOUNT;
     const heading = len(this.vel) > 0 ? norm(this.vel) : { x: 1, y: 0 };
-    return scale(rotateVec(heading, this.wanderAngle), 60);
+    return scale(rotateVec(heading, sway), 60);
   }
 
   update(hand, now, dt) {
@@ -129,7 +133,7 @@ class Fish {
       steer = add(steer, this.fleeFrom(hand));
     } else {
       this.state = 'wander';
-      steer = add(steer, this.wanderForce());
+      steer = add(steer, this.wanderForce(now));
     }
 
     if (this.pos.x < EDGE_MARGIN) steer.x += (EDGE_MARGIN - this.pos.x) * 4;
@@ -141,10 +145,18 @@ class Fish {
     const speed = len(this.vel);
     if (speed > maxSpeed) this.vel = scale(this.vel, maxSpeed / speed);
     this.pos = add(this.pos, scale(this.vel, dt));
+
+    if (speed > 1) {
+      const targetAngle = Math.atan2(this.vel.y, this.vel.x);
+      let diff = Math.atan2(Math.sin(targetAngle - this.heading), Math.cos(targetAngle - this.heading));
+      const maxStep = MAX_TURN_RATE * dt;
+      diff = Math.max(-maxStep, Math.min(maxStep, diff));
+      this.heading += diff;
+    }
   }
 
   draw() {
-    const angle = Math.atan2(this.vel.y, this.vel.x);
+    const angle = this.heading;
     const img = this.image;
     const iw = img.width || FISH_LENGTH;
     const ih = img.height || FISH_LENGTH * 0.6;
