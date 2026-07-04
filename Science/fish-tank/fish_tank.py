@@ -28,6 +28,7 @@ FOOD_EAT_RADIUS = 26
 FOOD_TIMEOUT_SECONDS = 6.0
 
 EDGE_MARGIN = 80
+PLAYABLE_HEIGHT_FRAC = 0.8
 
 CROP_PADDING_FRAC = 0.2
 CROP_TARGET_SIZE = 640
@@ -266,8 +267,10 @@ def main():
     pygame.display.set_caption("fish-tank")
     clock = pygame.time.Clock()
 
+    playable_height = int(mon.height * PLAYABLE_HEIGHT_FRAC)
+
     fish_surface = build_fish_surface()
-    fish = Fish((mon.width, mon.height))
+    fish = Fish((mon.width, playable_height))
     food = None
     food_set_at = 0.0
 
@@ -284,6 +287,10 @@ def main():
 
         hand = tracker.get_hand()
         laser = tracker.get_laser()
+        if hand is not None and hand[1] > playable_height:
+            hand = None
+        if laser is not None and laser[1] > playable_height:
+            laser = None
         if food is not None and now - food_set_at > FOOD_TIMEOUT_SECONDS:
             food = None
         if laser is not None:
@@ -300,6 +307,7 @@ def main():
             pygame.draw.circle(screen, FOOD_COLOR, (int(food[0]), int(food[1])), 8)
         fish.draw(screen, fish_surface)
         if args.debug:
+            pygame.draw.line(screen, (120, 120, 120), (0, playable_height), (mon.width, playable_height), 1)
             pygame.draw.circle(screen, (0, 200, 0), fish.pos, SEEK_RADIUS, 1)
             if hand is not None:
                 pygame.draw.circle(screen, (255, 0, 255), (int(hand[0]), int(hand[1])), 10)
