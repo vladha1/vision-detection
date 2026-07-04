@@ -165,11 +165,34 @@ def build_fish_surface(color):
     return surf
 
 
+def load_fish_sprite(path, target_length=FISH_LENGTH):
+    img = pygame.image.load(path).convert_alpha()
+    w, h = img.get_size()
+    scale = target_length / w
+    return pygame.transform.smoothscale(img, (target_length, max(1, int(h * scale))))
+
+
+def load_fish_surfaces(sprites_dir):
+    """Loads PNG/JPG sprites from sprites_dir (drawn fish facing right) if any
+    exist, otherwise falls back to the procedural colored fish shapes."""
+    if sprites_dir and os.path.isdir(sprites_dir):
+        exts = (".png", ".jpg", ".jpeg")
+        paths = sorted(
+            os.path.join(sprites_dir, name)
+            for name in os.listdir(sprites_dir)
+            if name.lower().endswith(exts)
+        )
+        if paths:
+            print(f"[sprites] loaded {len(paths)} fish image(s) from {sprites_dir}")
+            return [load_fish_sprite(p) for p in paths]
+    return [build_fish_surface(color) for color in FISH_COLORS]
+
+
 class Fish:
-    def __init__(self, bounds, color, temperament):
+    def __init__(self, bounds, surface, temperament):
         self.bounds = bounds
         self.temperament = temperament  # "seek" (curious) or "flee" (scared)
-        self.surface = build_fish_surface(color)
+        self.surface = surface
         margin = EDGE_MARGIN
         self.pos = pygame.Vector2(
             random.uniform(margin, bounds[0] - margin), random.uniform(margin, bounds[1] - margin)
@@ -244,6 +267,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--calibration", default="calibration.json")
     parser.add_argument("--debug", action="store_true", help="draw tracked hand position and playable boundary")
+    parser.add_argument("--sprites", default="sprites", help="folder of fish PNGs (drawn facing right); falls back to procedural fish if empty/missing")
     args = parser.parse_args()
 
     with open(args.calibration) as f:
@@ -268,10 +292,11 @@ def main():
     playable_height = int(mon.height * PLAYABLE_HEIGHT_FRAC)
     bounds = (mon.width, playable_height)
 
+    surfaces = load_fish_surfaces(args.sprites)
     temperaments = ["seek"] * (NUM_FISH // 2) + ["flee"] * (NUM_FISH - NUM_FISH // 2)
     random.shuffle(temperaments)
     fishes = [
-        Fish(bounds, FISH_COLORS[i % len(FISH_COLORS)], temperaments[i])
+        Fish(bounds, surfaces[i % len(surfaces)], temperaments[i])
         for i in range(NUM_FISH)
     ]
 
