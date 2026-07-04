@@ -41,6 +41,9 @@ PLAYABLE_HEIGHT_FRAC = 0.8
 CROP_PADDING_FRAC = 0.2
 CROP_TARGET_SIZE = 640
 
+HAND_CONFIRM_FRAMES = 4
+HAND_JUMP_THRESHOLD = 120
+
 
 class WallTracker(threading.Thread):
     """Runs camera capture on a background thread and exposes the latest
@@ -96,6 +99,8 @@ class WallTracker(threading.Thread):
 
     def run(self):
         hand_seen = False
+        last_raw = None
+        consecutive = 0
         while self.running:
             try:
                 ok, frame = self.cap.read()
@@ -105,11 +110,28 @@ class WallTracker(threading.Thread):
 
                 rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
                 result = self.hands.process(rgb)
-                hand_point = None
+                raw_point = None
                 if result.multi_hand_landmarks:
                     lm = result.multi_hand_landmarks[0].landmark[8]  # index fingertip
                     ch, cw = crop.shape[:2]
-                    hand_point = self._to_projector(lm.x * cw, lm.y * ch, off_x, off_y, scale)
+                    raw_point = self._to_projector(lm.x * cw, lm.y * ch, off_x, off_y, scale)
+
+                if raw_point is None:
+                    consecutive = 0
+                    last_raw = None
+                else:
+                    if last_raw is not None and math.hypot(
+                        raw_point[0] - last_raw[0], raw_point[1] - last_raw[1]
+                    ) <= HAND_JUMP_THRESHOLD:
+                        consecutive += 1
+                    else:
+                        consecutive = 1
+                    last_raw = raw_point
+
+                # a real hand stays roughly in place across several frames; a
+                # one-off false positive (e.g. briefly mistaking a fish sprite
+                # for a hand) won't reach this streak and gets filtered out.
+                hand_point = raw_point if consecutive >= HAND_CONFIRM_FRAMES else None
 
                 if hand_point is not None and not hand_seen:
                     print(f"[hand] detected -> projector {hand_point}")
