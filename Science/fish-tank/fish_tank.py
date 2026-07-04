@@ -40,21 +40,30 @@ class HandTracker(threading.Thread):
         self.running = True
 
     def run(self):
+        was_seen = False
         while self.running:
-            ok, frame = self.cap.read()
-            if not ok:
-                continue
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            result = self.hands.process(rgb)
-            point = None
-            if result.multi_hand_landmarks:
-                lm = result.multi_hand_landmarks[0].landmark[8]  # index fingertip
-                h, w = frame.shape[:2]
-                px = np.array([[[lm.x * w, lm.y * h]]], dtype=np.float32)
-                proj = cv2.perspectiveTransform(px, self.homography)
-                point = (float(proj[0, 0, 0]), float(proj[0, 0, 1]))
-            with self.lock:
-                self.point = point
+            try:
+                ok, frame = self.cap.read()
+                if not ok:
+                    continue
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                result = self.hands.process(rgb)
+                point = None
+                if result.multi_hand_landmarks:
+                    lm = result.multi_hand_landmarks[0].landmark[8]  # index fingertip
+                    h, w = frame.shape[:2]
+                    px = np.array([[[lm.x * w, lm.y * h]]], dtype=np.float32)
+                    proj = cv2.perspectiveTransform(px, self.homography)
+                    point = (float(proj[0, 0, 0]), float(proj[0, 0, 1]))
+                if point is not None and not was_seen:
+                    print(f"[hand] detected -> projector {point}")
+                elif point is None and was_seen:
+                    print("[hand] lost")
+                was_seen = point is not None
+                with self.lock:
+                    self.point = point
+            except Exception as exc:
+                print(f"[hand] tracker error: {exc}")
 
     def get_point(self):
         with self.lock:
@@ -135,6 +144,7 @@ class Fish:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--calibration", default="calibration.json")
+    parser.add_argument("--debug", action="store_true", help="draw tracked hand position and flee radius")
     args = parser.parse_args()
 
     with open(args.calibration) as f:
@@ -172,6 +182,11 @@ def main():
 
         screen.fill(WATER_COLOR)
         fish.draw(screen, fish_surface)
+        if args.debug:
+            pygame.draw.circle(screen, (0, 200, 0), fish.pos, FLEE_RADIUS, 1)
+            if threat is not None:
+                pygame.draw.circle(screen, (255, 0, 255), (int(threat[0]), int(threat[1])), 10)
+                pygame.draw.line(screen, (255, 0, 255), fish.pos, threat, 1)
         pygame.display.flip()
 
     tracker.stop()
