@@ -1,5 +1,6 @@
 import argparse
 import os
+import shutil
 import time
 
 import cv2
@@ -35,20 +36,49 @@ def process_drawing(src_path, out_path, target_width=140):
     return True
 
 
+def sync_from_downloads(downloads_dir, inbox_dir, seen):
+    try:
+        current = set(os.listdir(downloads_dir))
+    except FileNotFoundError:
+        return seen
+    for name in sorted(current - seen):
+        if not name.lower().endswith((".png", ".jpg", ".jpeg")):
+            continue
+        src = os.path.join(downloads_dir, name)
+        if not os.path.isfile(src):
+            continue
+        time.sleep(0.5)  # let AirDrop finish writing the file
+        try:
+            shutil.move(src, os.path.join(inbox_dir, name))
+            print(f"[downloads] moved {name} -> {inbox_dir}/")
+        except OSError as exc:
+            print(f"[downloads] could not move {name}: {exc}")
+    return current
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--inbox", default="inbox", help="drop photos of drawings here")
     parser.add_argument("--sprites", default="sprites", help="processed cutouts land here")
+    parser.add_argument("--downloads", default=os.path.expanduser("~/Downloads"),
+                         help="watched for new AirDropped photos and auto-moved into --inbox")
+    parser.add_argument("--no-downloads-watch", action="store_true", help="disable the Downloads watcher")
     parser.add_argument("--poll-seconds", type=float, default=2.0)
     args = parser.parse_args()
 
     os.makedirs(args.inbox, exist_ok=True)
     os.makedirs(args.sprites, exist_ok=True)
     print(f"Watching {args.inbox}/ - drop a photo of your drawing in there to add a fish!")
+    if not args.no_downloads_watch:
+        print(f"Also watching {args.downloads} - AirDrop a photo there and it'll move to {args.inbox}/ automatically.")
     print("Ctrl+C to stop.")
 
+    seen_downloads = set(os.listdir(args.downloads)) if not args.no_downloads_watch else set()
     next_n = len(os.listdir(args.sprites)) + 1
     while True:
+        if not args.no_downloads_watch:
+            seen_downloads = sync_from_downloads(args.downloads, args.inbox, seen_downloads)
+
         for name in sorted(os.listdir(args.inbox)):
             path = os.path.join(args.inbox, name)
             if not os.path.isfile(path) or name.startswith("."):
