@@ -22,22 +22,53 @@ FLEE_HOLD_SECONDS = 1.5
 EDGE_MARGIN = 80
 
 
+CROP_PADDING_FRAC = 0.2
+CROP_TARGET_SIZE = 640
+
+
 class HandTracker(threading.Thread):
     """Runs camera capture + hand detection on a background thread and exposes
     the latest fingertip position in projector coordinates."""
 
-    def __init__(self, camera_index, homography):
+    def __init__(self, camera_index, homography, camera_points=None):
         super().__init__(daemon=True)
         self.cap = cv2.VideoCapture(camera_index)
         if not self.cap.isOpened():
             raise RuntimeError(f"Could not open camera index {camera_index}")
         self.homography = homography
+        self.crop_box = self._compute_crop_box(camera_points) if camera_points else None
         self.hands = mp.solutions.hands.Hands(
-            max_num_hands=1, min_detection_confidence=0.5, min_tracking_confidence=0.5
+            max_num_hands=1, min_detection_confidence=0.4, min_tracking_confidence=0.4
         )
         self.lock = threading.Lock()
         self.point = None
         self.running = True
+
+    @staticmethod
+    def _compute_crop_box(camera_points):
+        pts = np.array(camera_points, dtype=np.float32)
+        x0, y0 = pts.min(axis=0)
+        x1, y1 = pts.max(axis=0)
+        pad_x = (x1 - x0) * CROP_PADDING_FRAC
+        pad_y = (y1 - y0) * CROP_PADDING_FRAC
+        return (x0 - pad_x, y0 - pad_y, x1 + pad_x, y1 + pad_y)
+
+    def _crop_and_scale(self, frame):
+        if self.crop_box is None:
+            return frame, 0, 0, 1.0
+        h, w = frame.shape[:2]
+        x0, y0, x1, y1 = self.crop_box
+        x0 = max(0, int(x0))
+        y0 = max(0, int(y0))
+        x1 = min(w, int(x1))
+        y1 = min(h, int(y1))
+        crop = frame[y0:y1, x0:x1]
+        scale = CROP_TARGET_SIZE / max(crop.shape[:2])
+        if scale > 1.0:
+            crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+        else:
+            scale = 1.0
+        return crop, x0, y0, scale
 
     def run(self):
         was_seen = False
@@ -46,13 +77,16 @@ class HandTracker(threading.Thread):
                 ok, frame = self.cap.read()
                 if not ok:
                     continue
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                crop, off_x, off_y, scale = self._crop_and_scale(frame)
+                rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
                 result = self.hands.process(rgb)
                 point = None
                 if result.multi_hand_landmarks:
                     lm = result.multi_hand_landmarks[0].landmark[8]  # index fingertip
-                    h, w = frame.shape[:2]
-                    px = np.array([[[lm.x * w, lm.y * h]]], dtype=np.float32)
+                    ch, cw = crop.shape[:2]
+                    full_x = (lm.x * cw) / scale + off_x
+                    full_y = (lm.y * ch) / scale + off_y
+                    px = np.array([[[full_x, full_y]]], dtype=np.float32)
                     proj = cv2.perspectiveTransform(px, self.homography)
                     point = (float(proj[0, 0, 0]), float(proj[0, 0, 1]))
                 if point is not None and not was_seen:
@@ -154,7 +188,10 @@ def main():
     mon = monitors[calib["projector_monitor"]]
     homography = np.array(calib["homography"], dtype=np.float32)
 
-    tracker = HandTracker(calib["camera_index"], homography)
+    camera_points = calib.get("camera_points")
+    if camera_points is None:
+        print("[warn] calibration.json has no camera_points - re-run calibrate.py to enable cropped/zoomed hand detection")
+    tracker = HandTracker(calib["camera_index"], homography, camera_points)
     tracker.start()
 
     os.environ["SDL_VIDEO_WINDOW_POS"] = f"{mon.x},{mon.y}"

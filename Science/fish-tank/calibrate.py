@@ -101,6 +101,7 @@ def main():
         "projector_monitor": proj_index,
         "projector_size": [mon.width, mon.height],
         "homography": homography.tolist(),
+        "camera_points": camera_points,
     }
     with open(args.out, "w") as f:
         json.dump(data, f, indent=2)
