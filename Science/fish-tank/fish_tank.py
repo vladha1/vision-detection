@@ -37,6 +37,7 @@ FLEE_FORCE = 900
 
 EDGE_MARGIN = 80
 PLAYABLE_HEIGHT_FRAC = 0.8
+SPRITE_SCAN_SECONDS = 2.0
 
 CROP_PADDING_FRAC = 0.2
 CROP_TARGET_SIZE = 640
@@ -172,19 +173,24 @@ def load_fish_sprite(path, target_length=FISH_LENGTH):
     return pygame.transform.smoothscale(img, (target_length, max(1, int(h * scale))))
 
 
+def list_sprite_paths(sprites_dir):
+    if not sprites_dir or not os.path.isdir(sprites_dir):
+        return []
+    exts = (".png", ".jpg", ".jpeg")
+    return sorted(
+        os.path.join(sprites_dir, name)
+        for name in os.listdir(sprites_dir)
+        if name.lower().endswith(exts)
+    )
+
+
 def load_fish_surfaces(sprites_dir):
     """Loads PNG/JPG sprites from sprites_dir (drawn fish facing right) if any
     exist, otherwise falls back to the procedural colored fish shapes."""
-    if sprites_dir and os.path.isdir(sprites_dir):
-        exts = (".png", ".jpg", ".jpeg")
-        paths = sorted(
-            os.path.join(sprites_dir, name)
-            for name in os.listdir(sprites_dir)
-            if name.lower().endswith(exts)
-        )
-        if paths:
-            print(f"[sprites] loaded {len(paths)} fish image(s) from {sprites_dir}")
-            return [load_fish_sprite(p) for p in paths]
+    paths = list_sprite_paths(sprites_dir)
+    if paths:
+        print(f"[sprites] loaded {len(paths)} fish image(s) from {sprites_dir}")
+        return [load_fish_sprite(p) for p in paths]
     return [build_fish_surface(color) for color in FISH_COLORS]
 
 
@@ -299,6 +305,8 @@ def main():
         Fish(bounds, surfaces[i % len(surfaces)], temperaments[i])
         for i in range(NUM_FISH)
     ]
+    known_sprite_paths = set(list_sprite_paths(args.sprites))
+    last_sprite_scan = 0.0
 
     running = True
     while running:
@@ -310,6 +318,14 @@ def main():
                 running = False
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 running = False
+
+        if now - last_sprite_scan > SPRITE_SCAN_SECONDS:
+            last_sprite_scan = now
+            current_paths = set(list_sprite_paths(args.sprites))
+            for path in sorted(current_paths - known_sprite_paths):
+                print(f"[sprites] new fish arrived: {path}")
+                fishes.append(Fish(bounds, load_fish_sprite(path), random.choice(["seek", "flee"])))
+            known_sprite_paths = current_paths
 
         hand = tracker.get_hand()
         if hand is not None and hand[1] > playable_height:
