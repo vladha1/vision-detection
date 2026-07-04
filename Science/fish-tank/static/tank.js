@@ -15,19 +15,29 @@ const WATER_COLOR = '#0a2846';
 let W = window.innerWidth;
 let H = window.innerHeight;
 let PLAYABLE_H = H * 0.8;
+let config = null; // calibration space the /api/hand coordinates are reported in
 
 function resize() {
   W = window.innerWidth;
   H = window.innerHeight;
   canvas.width = W;
   canvas.height = H;
+  if (config) PLAYABLE_H = H * (config.playable_height / config.height);
 }
 window.addEventListener('resize', resize);
 resize();
 
 fetch('/api/config').then(r => r.json()).then(cfg => {
-  PLAYABLE_H = H * (cfg.playable_height / cfg.height);
+  config = cfg;
+  resize();
 });
+
+// /api/hand reports positions in the calibrated projector space (e.g.
+// 1920x1080), which may not match this window's actual pixel size.
+function toCanvasSpace(point) {
+  if (!point || !config) return point;
+  return { x: point.x * (W / config.width), y: point.y * (H / config.height) };
+}
 
 const imageCache = {};
 function getImage(src) {
@@ -175,7 +185,7 @@ let hand = null;
 async function syncHand() {
   try {
     const res = await fetch('/api/hand');
-    hand = await res.json();
+    hand = toCanvasSpace(await res.json());
   } catch (e) {
     hand = null;
   }
