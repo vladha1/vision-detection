@@ -196,6 +196,8 @@ setInterval(syncFishList, 2000);
 syncHand();
 setInterval(syncHand, 100);
 
+const DEBUG = new URLSearchParams(location.search).has('debug');
+
 let lastTime = performance.now();
 function frame(t) {
   const dt = Math.min(0.05, (t - lastTime) / 1000);
@@ -208,6 +210,20 @@ function frame(t) {
   for (const f of fishes) {
     f.update(hand, now, dt);
     f.draw();
+  }
+
+  if (DEBUG) {
+    ctx.strokeStyle = '#787878';
+    ctx.beginPath();
+    ctx.moveTo(0, PLAYABLE_H);
+    ctx.lineTo(W, PLAYABLE_H);
+    ctx.stroke();
+    if (hand) {
+      ctx.fillStyle = '#ff00ff';
+      ctx.beginPath();
+      ctx.arc(hand.x, hand.y, 10, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   requestAnimationFrame(frame);
