@@ -12,7 +12,6 @@ import pygame
 from screeninfo import get_monitors
 
 WATER_COLOR = (10, 40, 70)
-FOOD_COLOR = (255, 220, 60)
 FISH_LENGTH = 90
 NUM_FISH = 10
 FISH_COLORS = [
@@ -36,28 +35,17 @@ SEEK_ARRIVE_RADIUS = 90
 FLEE_SPEED = 260
 FLEE_FORCE = 900
 
-FOOD_SPEED = 260
-FOOD_ARRIVE_RADIUS = 40
-FOOD_EAT_RADIUS = 26
-FOOD_TIMEOUT_SECONDS = 6.0
-
 EDGE_MARGIN = 80
 PLAYABLE_HEIGHT_FRAC = 0.8
 
 CROP_PADDING_FRAC = 0.2
 CROP_TARGET_SIZE = 640
 
-LASER_HUE_RANGE = (35, 95)
-LASER_SAT_MIN = 60
-LASER_VAL_MIN = 210
-LASER_MIN_AREA = 2
-LASER_MAX_AREA = 500
-
 
 class WallTracker(threading.Thread):
     """Runs camera capture on a background thread and exposes the latest
-    hand-fingertip and green-laser-dot positions, both in projector
-    coordinates (mapped through the calibration homography)."""
+    hand-fingertip position in projector coordinates (mapped through the
+    calibration homography)."""
 
     def __init__(self, camera_index, homography, camera_points=None):
         super().__init__(daemon=True)
@@ -71,7 +59,6 @@ class WallTracker(threading.Thread):
         )
         self.lock = threading.Lock()
         self.hand_point = None
-        self.laser_point = None
         self.running = True
 
     @staticmethod
@@ -107,26 +94,8 @@ class WallTracker(threading.Thread):
         proj = cv2.perspectiveTransform(px, self.homography)
         return (float(proj[0, 0, 0]), float(proj[0, 0, 1]))
 
-    def _detect_laser(self, crop_bgr):
-        hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
-        lower = np.array([LASER_HUE_RANGE[0], LASER_SAT_MIN, LASER_VAL_MIN])
-        upper = np.array([LASER_HUE_RANGE[1], 255, 255])
-        mask = cv2.inRange(hsv, lower, upper)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return None
-        c = max(contours, key=cv2.contourArea)
-        area = cv2.contourArea(c)
-        if area < LASER_MIN_AREA or area > LASER_MAX_AREA:
-            return None
-        m = cv2.moments(c)
-        if m["m00"] == 0:
-            return None
-        return (m["m10"] / m["m00"], m["m01"] / m["m00"])
-
     def run(self):
         hand_seen = False
-        laser_seen = False
         while self.running:
             try:
                 ok, frame = self.cap.read()
@@ -142,36 +111,20 @@ class WallTracker(threading.Thread):
                     ch, cw = crop.shape[:2]
                     hand_point = self._to_projector(lm.x * cw, lm.y * ch, off_x, off_y, scale)
 
-                laser_px = self._detect_laser(crop)
-                laser_point = None
-                if laser_px is not None:
-                    laser_point = self._to_projector(laser_px[0], laser_px[1], off_x, off_y, scale)
-
                 if hand_point is not None and not hand_seen:
                     print(f"[hand] detected -> projector {hand_point}")
                 elif hand_point is None and hand_seen:
                     print("[hand] lost")
                 hand_seen = hand_point is not None
 
-                if laser_point is not None and not laser_seen:
-                    print(f"[laser] detected -> projector {laser_point}")
-                elif laser_point is None and laser_seen:
-                    print("[laser] lost")
-                laser_seen = laser_point is not None
-
                 with self.lock:
                     self.hand_point = hand_point
-                    self.laser_point = laser_point
             except Exception as exc:
                 print(f"[tracker] error: {exc}")
 
     def get_hand(self):
         with self.lock:
             return self.hand_point
-
-    def get_laser(self):
-        with self.lock:
-            return self.laser_point
 
     def stop(self):
         self.running = False
@@ -227,28 +180,23 @@ class Fish:
         heading = self.vel.normalize() if self.vel.length() > 0 else pygame.Vector2(1, 0)
         return heading.rotate(math.degrees(self.wander_angle)) * 60
 
-    def update(self, dt, hand, food, now):
+    def update(self, dt, hand, now):
         steer = pygame.Vector2()
         max_speed = WANDER_SPEED
 
-        if food is not None:
-            self.state = "eat"
-            max_speed = FOOD_SPEED
-            steer += self._steer_toward(pygame.Vector2(food), max_speed, FOOD_ARRIVE_RADIUS)
-        else:
-            if hand is not None and (self.pos - pygame.Vector2(hand)).length() < SEEK_RADIUS:
-                self.state = self.temperament
-                self.react_until = now + REACT_HOLD_SECONDS
+        if hand is not None and (self.pos - pygame.Vector2(hand)).length() < SEEK_RADIUS:
+            self.state = self.temperament
+            self.react_until = now + REACT_HOLD_SECONDS
 
-            if self.state == "seek" and now < self.react_until and hand is not None:
-                max_speed = SEEK_SPEED
-                steer += self._steer_toward(pygame.Vector2(hand), max_speed, SEEK_ARRIVE_RADIUS)
-            elif self.state == "flee" and now < self.react_until and hand is not None:
-                max_speed = FLEE_SPEED
-                steer += self._flee_from(pygame.Vector2(hand))
-            else:
-                self.state = "wander"
-                steer += self._wander_force()
+        if self.state == "seek" and now < self.react_until and hand is not None:
+            max_speed = SEEK_SPEED
+            steer += self._steer_toward(pygame.Vector2(hand), max_speed, SEEK_ARRIVE_RADIUS)
+        elif self.state == "flee" and now < self.react_until and hand is not None:
+            max_speed = FLEE_SPEED
+            steer += self._flee_from(pygame.Vector2(hand))
+        else:
+            self.state = "wander"
+            steer += self._wander_force()
 
         w, h = self.bounds
         for axis, size in ((0, w), (1, h)):
@@ -273,7 +221,7 @@ class Fish:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--calibration", default="calibration.json")
-    parser.add_argument("--debug", action="store_true", help="draw tracked hand/laser position and seek radius")
+    parser.add_argument("--debug", action="store_true", help="draw tracked hand position and playable boundary")
     args = parser.parse_args()
 
     with open(args.calibration) as f:
@@ -304,8 +252,6 @@ def main():
         Fish(bounds, FISH_COLORS[i % len(FISH_COLORS)], temperaments[i])
         for i in range(NUM_FISH)
     ]
-    food = None
-    food_set_at = 0.0
 
     running = True
     while running:
@@ -319,33 +265,19 @@ def main():
                 running = False
 
         hand = tracker.get_hand()
-        laser = tracker.get_laser()
         if hand is not None and hand[1] > playable_height:
             hand = None
-        if laser is not None and laser[1] > playable_height:
-            laser = None
-        if food is not None and now - food_set_at > FOOD_TIMEOUT_SECONDS:
-            food = None
-        if laser is not None:
-            food = laser
-            food_set_at = now
 
         for fish in fishes:
-            fish.update(dt, hand, food, now)
-            if food is not None and (fish.pos - pygame.Vector2(food)).length() < FOOD_EAT_RADIUS:
-                food = None
+            fish.update(dt, hand, now)
 
         screen.fill(WATER_COLOR)
-        if food is not None:
-            pygame.draw.circle(screen, FOOD_COLOR, (int(food[0]), int(food[1])), 8)
         for fish in fishes:
             fish.draw(screen)
         if args.debug:
             pygame.draw.line(screen, (120, 120, 120), (0, playable_height), (mon.width, playable_height), 1)
             if hand is not None:
                 pygame.draw.circle(screen, (255, 0, 255), (int(hand[0]), int(hand[1])), 10)
-            if laser is not None:
-                pygame.draw.circle(screen, (0, 255, 255), (int(laser[0]), int(laser[1])), 6)
         pygame.display.flip()
 
     tracker.stop()
