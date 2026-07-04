@@ -12,15 +12,29 @@ import pygame
 from screeninfo import get_monitors
 
 WATER_COLOR = (10, 40, 70)
-FISH_COLOR = (255, 140, 40)
 FOOD_COLOR = (255, 220, 60)
 FISH_LENGTH = 90
+NUM_FISH = 10
+FISH_COLORS = [
+    (255, 140, 40),   # orange
+    (255, 70, 70),    # red
+    (90, 170, 255),   # blue
+    (255, 215, 0),    # gold
+    (190, 90, 255),   # purple
+    (90, 255, 150),   # mint
+    (255, 110, 180),  # pink
+    (120, 220, 255),  # light blue
+    (245, 245, 245),  # white
+    (170, 255, 60),   # lime
+]
 
 WANDER_SPEED = 90
 SEEK_SPEED = 200
 SEEK_RADIUS = 320
-SEEK_HOLD_SECONDS = 1.0
+REACT_HOLD_SECONDS = 1.0
 SEEK_ARRIVE_RADIUS = 90
+FLEE_SPEED = 260
+FLEE_FORCE = 900
 
 FOOD_SPEED = 260
 FOOD_ARRIVE_RADIUS = 40
@@ -164,26 +178,31 @@ class WallTracker(threading.Thread):
         self.cap.release()
 
 
-def build_fish_surface():
+def build_fish_surface(color):
     w, h = FISH_LENGTH, int(FISH_LENGTH * 0.6)
     surf = pygame.Surface((w, h), pygame.SRCALPHA)
     body = [(w * 0.15, h * 0.5), (w * 0.55, h * 0.1), (w * 0.92, h * 0.3),
             (w * 0.92, h * 0.7), (w * 0.55, h * 0.9)]
     tail = [(w * 0.15, h * 0.5), (0, h * 0.1), (0, h * 0.9)]
-    pygame.draw.polygon(surf, FISH_COLOR, body)
-    pygame.draw.polygon(surf, FISH_COLOR, tail)
+    pygame.draw.polygon(surf, color, body)
+    pygame.draw.polygon(surf, color, tail)
     pygame.draw.circle(surf, (20, 20, 20), (int(w * 0.75), int(h * 0.35)), 4)
     return surf
 
 
 class Fish:
-    def __init__(self, bounds):
+    def __init__(self, bounds, color, temperament):
         self.bounds = bounds
-        self.pos = pygame.Vector2(bounds[0] / 2, bounds[1] / 2)
+        self.temperament = temperament  # "seek" (curious) or "flee" (scared)
+        self.surface = build_fish_surface(color)
+        margin = EDGE_MARGIN
+        self.pos = pygame.Vector2(
+            random.uniform(margin, bounds[0] - margin), random.uniform(margin, bounds[1] - margin)
+        )
         self.vel = pygame.Vector2(1, 0).rotate(random.uniform(0, 360))
         self.wander_angle = 0.0
         self.state = "wander"
-        self.seek_until = 0.0
+        self.react_until = 0.0
 
     def _steer_toward(self, target, max_speed, arrive_radius):
         to_target = target - self.pos
@@ -194,33 +213,42 @@ class Fish:
             desired = pygame.Vector2()
         return (desired - self.vel) * 6
 
+    def _flee_from(self, threat):
+        away = self.pos - threat
+        dist = away.length()
+        if dist > 1e-3:
+            away_dir = away / dist
+        else:
+            away_dir = pygame.Vector2(1, 0).rotate(random.uniform(0, 360))
+        return away_dir * FLEE_FORCE * (1 - min(dist, SEEK_RADIUS) / SEEK_RADIUS)
+
+    def _wander_force(self):
+        self.wander_angle += random.uniform(-0.5, 0.5)
+        heading = self.vel.normalize() if self.vel.length() > 0 else pygame.Vector2(1, 0)
+        return heading.rotate(math.degrees(self.wander_angle)) * 60
+
     def update(self, dt, hand, food, now):
         steer = pygame.Vector2()
         max_speed = WANDER_SPEED
-        target = None
 
         if food is not None:
-            target = pygame.Vector2(food)
-            max_speed = FOOD_SPEED
             self.state = "eat"
+            max_speed = FOOD_SPEED
+            steer += self._steer_toward(pygame.Vector2(food), max_speed, FOOD_ARRIVE_RADIUS)
         else:
             if hand is not None and (self.pos - pygame.Vector2(hand)).length() < SEEK_RADIUS:
-                self.state = "seek"
-                self.seek_until = now + SEEK_HOLD_SECONDS
-            if self.state == "seek" and now < self.seek_until and hand is not None:
-                target = pygame.Vector2(hand)
-                max_speed = SEEK_SPEED
-            elif self.state != "eat":
-                self.state = "wander"
+                self.state = self.temperament
+                self.react_until = now + REACT_HOLD_SECONDS
 
-        if target is not None:
-            arrive_radius = FOOD_ARRIVE_RADIUS if self.state == "eat" else SEEK_ARRIVE_RADIUS
-            steer += self._steer_toward(target, max_speed, arrive_radius)
-        else:
-            self.wander_angle += random.uniform(-0.5, 0.5)
-            heading = self.vel.normalize() if self.vel.length() > 0 else pygame.Vector2(1, 0)
-            wander_dir = heading.rotate(math.degrees(self.wander_angle))
-            steer += wander_dir * 60
+            if self.state == "seek" and now < self.react_until and hand is not None:
+                max_speed = SEEK_SPEED
+                steer += self._steer_toward(pygame.Vector2(hand), max_speed, SEEK_ARRIVE_RADIUS)
+            elif self.state == "flee" and now < self.react_until and hand is not None:
+                max_speed = FLEE_SPEED
+                steer += self._flee_from(pygame.Vector2(hand))
+            else:
+                self.state = "wander"
+                steer += self._wander_force()
 
         w, h = self.bounds
         for axis, size in ((0, w), (1, h)):
@@ -235,9 +263,9 @@ class Fish:
 
         self.pos += self.vel * dt
 
-    def draw(self, screen, fish_surface):
+    def draw(self, screen):
         angle = -math.degrees(math.atan2(self.vel.y, self.vel.x))
-        rotated = pygame.transform.rotate(fish_surface, angle)
+        rotated = pygame.transform.rotate(self.surface, angle)
         rect = rotated.get_rect(center=self.pos)
         screen.blit(rotated, rect)
 
@@ -268,9 +296,14 @@ def main():
     clock = pygame.time.Clock()
 
     playable_height = int(mon.height * PLAYABLE_HEIGHT_FRAC)
+    bounds = (mon.width, playable_height)
 
-    fish_surface = build_fish_surface()
-    fish = Fish((mon.width, playable_height))
+    temperaments = ["seek"] * (NUM_FISH // 2) + ["flee"] * (NUM_FISH - NUM_FISH // 2)
+    random.shuffle(temperaments)
+    fishes = [
+        Fish(bounds, FISH_COLORS[i % len(FISH_COLORS)], temperaments[i])
+        for i in range(NUM_FISH)
+    ]
     food = None
     food_set_at = 0.0
 
@@ -297,21 +330,20 @@ def main():
             food = laser
             food_set_at = now
 
-        fish.update(dt, hand, food, now)
-
-        if food is not None and (fish.pos - pygame.Vector2(food)).length() < FOOD_EAT_RADIUS:
-            food = None
+        for fish in fishes:
+            fish.update(dt, hand, food, now)
+            if food is not None and (fish.pos - pygame.Vector2(food)).length() < FOOD_EAT_RADIUS:
+                food = None
 
         screen.fill(WATER_COLOR)
         if food is not None:
             pygame.draw.circle(screen, FOOD_COLOR, (int(food[0]), int(food[1])), 8)
-        fish.draw(screen, fish_surface)
+        for fish in fishes:
+            fish.draw(screen)
         if args.debug:
             pygame.draw.line(screen, (120, 120, 120), (0, playable_height), (mon.width, playable_height), 1)
-            pygame.draw.circle(screen, (0, 200, 0), fish.pos, SEEK_RADIUS, 1)
             if hand is not None:
                 pygame.draw.circle(screen, (255, 0, 255), (int(hand[0]), int(hand[1])), 10)
-                pygame.draw.line(screen, (255, 0, 255), fish.pos, hand, 1)
             if laser is not None:
                 pygame.draw.circle(screen, (0, 255, 255), (int(laser[0]), int(laser[1])), 6)
         pygame.display.flip()
