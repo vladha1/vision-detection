@@ -42,10 +42,12 @@ def sync_from_downloads(downloads_dir, inbox_dir, seen):
     except FileNotFoundError:
         return seen
     for name in sorted(current - seen):
-        if not name.lower().endswith((".png", ".jpg", ".jpeg")):
-            continue
         src = os.path.join(downloads_dir, name)
         if not os.path.isfile(src):
+            continue
+        if not name.lower().endswith((".png", ".jpg", ".jpeg")):
+            if name.lower().endswith(".heic"):
+                print(f"[downloads] ignoring {name} (HEIC) - set iPhone Settings > Camera > Formats > Most Compatible")
             continue
         time.sleep(0.5)  # let AirDrop finish writing the file
         try:
