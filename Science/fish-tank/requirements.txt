@@ -3,3 +3,5 @@ mediapipe==0.10.14
 pygame
 screeninfo
 numpy
+flask
+requests
