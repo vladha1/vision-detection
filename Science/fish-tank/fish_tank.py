@@ -25,6 +25,7 @@ SEEK_ARRIVE_RADIUS = 90
 FOOD_SPEED = 260
 FOOD_ARRIVE_RADIUS = 40
 FOOD_EAT_RADIUS = 26
+FOOD_TIMEOUT_SECONDS = 6.0
 
 EDGE_MARGIN = 80
 
@@ -268,6 +269,7 @@ def main():
     fish_surface = build_fish_surface()
     fish = Fish((mon.width, mon.height))
     food = None
+    food_set_at = 0.0
 
     running = True
     while running:
@@ -282,8 +284,11 @@ def main():
 
         hand = tracker.get_hand()
         laser = tracker.get_laser()
+        if food is not None and now - food_set_at > FOOD_TIMEOUT_SECONDS:
+            food = None
         if laser is not None:
             food = laser
+            food_set_at = now
 
         fish.update(dt, hand, food, now)
 
