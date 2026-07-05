@@ -873,7 +873,6 @@ let pmGrid = null;
 let pmDots = null;
 let pmPac = null;
 let pmGhosts = null;
-let pmHandLastPos = null;
 let pmCaughtUntil = 0;
 let pmScore = 0;
 let pmInitialized = false;
@@ -932,21 +931,22 @@ function pmInit() {
   pmResetPositions();
   pmScore = 0;
   pmCaughtUntil = 0;
-  pmHandLastPos = null;
 }
 
-function pmReadHandInput() {
+// Continuous, position-relative steering: whichever side of Pac-Man the hand
+// is currently on (not how it's moving) sets the queued direction, so it
+// keeps responding even while the hand is held still rather than swiping.
+function pmReadHandInput(tile, offX, offY) {
   if (!hand) return;
-  if (pmHandLastPos) {
-    const dx = hand.x - pmHandLastPos.x;
-    const dy = hand.y - pmHandLastPos.y;
-    if (Math.hypot(dx, dy) > 7) {
-      pmPac.nextDir = Math.abs(dx) > Math.abs(dy)
-        ? { dr: 0, dc: dx > 0 ? 1 : -1 }
-        : { dr: dy > 0 ? 1 : -1, dc: 0 };
-    }
+  const handRow = (hand.y - offY) / tile;
+  const handCol = (hand.x - offX) / tile;
+  const dr = handRow - pmPac.row;
+  const dc = handCol - pmPac.col;
+  if (Math.hypot(dr, dc) > 0.6) {
+    pmPac.nextDir = Math.abs(dc) > Math.abs(dr)
+      ? { dr: 0, dc: dc > 0 ? 1 : -1 }
+      : { dr: dr > 0 ? 1 : -1, dc: 0 };
   }
-  pmHandLastPos = { x: hand.x, y: hand.y };
 }
 
 function pmMoveGhost(g, dt) {
@@ -987,7 +987,7 @@ function drawPacmanScene(now, dt) {
   const caught = now < pmCaughtUntil;
 
   if (!caught) {
-    pmReadHandInput();
+    pmReadHandInput(tile, offX, offY);
 
     const atRow = Math.abs(pmPac.row - Math.round(pmPac.row)) < 0.15;
     const atCol = Math.abs(pmPac.col - Math.round(pmPac.col)) < 0.15;
