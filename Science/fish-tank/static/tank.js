@@ -866,11 +866,16 @@ const PM_COLS = 19;
 const PM_ROWS = 13;
 const PM_SPEED = 4.4; // cells/sec
 const PM_GHOST_SPEED = 3.6;
+const PM_TUNNEL_ROW = 6; // left/right wraparound passage, classic Pac-Man style
+const PM_POWER_DURATION = 7;
+const PM_POWER_COLOR = '#2233dd';
 const PM_WALL_COLOR = '#1a3fbf';
 const PM_GHOST_COLORS = ['#ff4d4d', '#ffb3f0', '#66e0ff'];
 
 let pmGrid = null;
 let pmDots = null;
+let pmPowerDots = null;
+let pmPowerUntil = 0;
 let pmPac = null;
 let pmGhosts = null;
 let pmCaughtUntil = 0;
@@ -900,36 +905,61 @@ function pmBuildMaze() {
       }
     }
   }
+  grid[PM_TUNNEL_ROW][0] = 0;
+  grid[PM_TUNNEL_ROW][PM_COLS - 1] = 0;
   return grid;
 }
 
-function pmFillDots() {
+function pmPowerPelletCells() {
+  return [
+    { row: 1, col: 1 },
+    { row: 1, col: PM_COLS - 2 },
+    { row: PM_ROWS - 2, col: 1 },
+    { row: PM_ROWS - 2, col: PM_COLS - 2 },
+  ];
+}
+
+function pmResetDots() {
+  const powerKeys = new Set(pmPowerPelletCells().map(p => `${p.row},${p.col}`));
   pmDots = new Set();
   for (let r = 1; r < PM_ROWS - 1; r++) {
     for (let c = 1; c < PM_COLS - 1; c++) {
-      if (pmGrid[r][c] === 0) pmDots.add(`${r},${c}`);
+      if (pmGrid[r][c] === 0 && !powerKeys.has(`${r},${c}`)) pmDots.add(`${r},${c}`);
     }
   }
+  pmPowerDots = powerKeys;
 }
 
 function pmIsWall(row, col) {
-  const r = Math.round(row), c = Math.round(col);
+  const r = Math.round(row);
+  const c = Math.round(col);
+  if (r === PM_TUNNEL_ROW && (c < 0 || c >= PM_COLS)) return false; // open tunnel mouth
   if (r < 0 || r >= PM_ROWS || c < 0 || c >= PM_COLS) return true;
   return pmGrid[r][c] === 1;
 }
 
+function pmWrapTunnel(entity) {
+  if (Math.round(entity.row) !== PM_TUNNEL_ROW) return;
+  if (entity.col < -0.5) entity.col = PM_COLS - 0.5;
+  else if (entity.col > PM_COLS - 0.5) entity.col = -0.5;
+}
+
 function pmResetPositions() {
   pmPac = { row: 6, col: 9, dir: { dr: 0, dc: 0 }, nextDir: { dr: 0, dc: 0 } };
-  pmGhosts = PM_GHOST_COLORS.map((color, i) => ({
-    row: 1.5 + i * 0.6, col: PM_COLS - 2, dir: { dr: 0, dc: -1 }, color,
-  }));
+  pmGhosts = PM_GHOST_COLORS.map((color, i) => {
+    // integer row/col so the "at an intersection" check triggers immediately
+    // and wall-aware direction selection kicks in right away
+    const homeRow = 1 + i, homeCol = PM_COLS - 2;
+    return { row: homeRow, col: homeCol, dir: { dr: 0, dc: -1 }, color, homeRow, homeCol };
+  });
   pmStarted = false; // ghosts stay still until Pac-Man's first real move
+  pmPowerUntil = 0;
 }
 
 function pmInit() {
   pmInitialized = true;
   pmGrid = pmBuildMaze();
-  pmFillDots();
+  pmResetDots();
   pmResetPositions();
   pmScore = 0;
   pmCaughtUntil = 0;
@@ -951,7 +981,7 @@ function pmReadHandInput(tile, offX, offY) {
   }
 }
 
-function pmMoveGhost(g, dt) {
+function pmMoveGhost(g, dt, frightened) {
   const atCenter = Math.abs(g.row - Math.round(g.row)) < 0.1 && Math.abs(g.col - Math.round(g.col)) < 0.1;
   if (atCenter) {
     const r = Math.round(g.row), c = Math.round(g.col);
@@ -963,7 +993,7 @@ function pmMoveGhost(g, dt) {
         options.sort((a, b) => {
           const da = Math.hypot((r + a.dr) - pmPac.row, (c + a.dc) - pmPac.col);
           const db = Math.hypot((r + b.dr) - pmPac.row, (c + b.dc) - pmPac.col);
-          return da - db;
+          return frightened ? db - da : da - db; // frightened: prefer farthest, not closest
         });
         g.dir = options[0];
       } else {
@@ -971,8 +1001,10 @@ function pmMoveGhost(g, dt) {
       }
     }
   }
-  g.row += g.dir.dr * PM_GHOST_SPEED * dt;
-  g.col += g.dir.dc * PM_GHOST_SPEED * dt;
+  const speed = frightened ? PM_GHOST_SPEED * 0.6 : PM_GHOST_SPEED;
+  g.row += g.dir.dr * speed * dt;
+  g.col += g.dir.dc * speed * dt;
+  pmWrapTunnel(g);
 }
 
 function drawPacmanScene(now, dt) {
@@ -1009,23 +1041,39 @@ function drawPacmanScene(now, dt) {
         pmPac.row += pmPac.dir.dr * PM_SPEED * dt;
         pmPac.col += pmPac.dir.dc * PM_SPEED * dt;
       } else {
+        // hit a wall - auto-turn onto whatever's open instead of stopping
+        // dead. Only the very first move (pmStarted still false) requires
+        // explicit hand input.
         pmPac.row = Math.round(pmPac.row);
         pmPac.col = Math.round(pmPac.col);
-        pmPac.dir = { dr: 0, dc: 0 };
+        const r = pmPac.row, c = pmPac.col;
+        const options = [{ dr: -1, dc: 0 }, { dr: 1, dc: 0 }, { dr: 0, dc: -1 }, { dr: 0, dc: 1 }]
+          .filter(d => !pmIsWall(r + d.dr, c + d.dc));
+        const preferred = options.find(o => o.dr === pmPac.nextDir.dr && o.dc === pmPac.nextDir.dc);
+        if (preferred) pmPac.dir = preferred;
+        else if (options.length) pmPac.dir = options[Math.floor(Math.random() * options.length)];
       }
+      pmWrapTunnel(pmPac);
     }
 
     const key = `${Math.round(pmPac.row)},${Math.round(pmPac.col)}`;
     if (pmDots.has(key)) { pmDots.delete(key); pmScore++; }
-    if (pmDots.size === 0) { pmFillDots(); }
+    if (pmPowerDots.has(key)) { pmPowerDots.delete(key); pmPowerUntil = now + PM_POWER_DURATION; pmScore += 10; }
+    if (pmDots.size === 0 && pmPowerDots.size === 0) { pmResetDots(); }
 
     if (pmStarted) {
-      for (const g of pmGhosts) pmMoveGhost(g, dt);
+      const frightened = now < pmPowerUntil;
+      for (const g of pmGhosts) pmMoveGhost(g, dt, frightened);
       for (const g of pmGhosts) {
         if (Math.hypot(g.row - pmPac.row, g.col - pmPac.col) < 0.6) {
-          pmCaughtUntil = now + 1.4;
-          pmResetPositions();
-          break;
+          if (frightened) {
+            g.row = g.homeRow; g.col = g.homeCol; g.dir = { dr: 0, dc: -1 };
+            pmScore += 50;
+          } else {
+            pmCaughtUntil = now + 1.4;
+            pmResetPositions();
+            break;
+          }
         }
       }
     }
@@ -1052,14 +1100,27 @@ function drawPacmanScene(now, dt) {
     ctx.fill();
   }
 
+  // power pellets ("killer buttons") - eating one lets Pac-Man eat ghosts
+  ctx.fillStyle = '#fff';
+  for (const key of pmPowerDots) {
+    const [r, c] = key.split(',').map(Number);
+    const p = toPx(r, c);
+    const pulse = 0.7 + 0.3 * Math.abs(Math.sin(now * 4));
+    ctx.beginPath();
+    ctx.arc(p.x + tile / 2, p.y + tile / 2, tile * 0.18 * pulse, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   // ghosts
+  const frightenedNow = now < pmPowerUntil;
+  const flashingNow = frightenedNow && (pmPowerUntil - now) < 2 && Math.floor(now * 6) % 2 === 0;
   for (const g of pmGhosts) {
     const p = toPx(g.row, g.col);
     const cx = p.x + tile / 2, cy = p.y + tile / 2;
     const gr = tile * 0.42;
     ctx.save();
     ctx.translate(cx, cy);
-    ctx.fillStyle = g.color;
+    ctx.fillStyle = flashingNow ? '#ffffff' : (frightenedNow ? PM_POWER_COLOR : g.color);
     ctx.beginPath();
     ctx.arc(0, 0, gr, Math.PI, 0);
     ctx.lineTo(gr, gr * 0.7);
