@@ -793,25 +793,32 @@ let handMarkerHeading = 0;
 let handMarkerLastPos = null;
 
 function drawHandMarker(now) {
-  if (!hand) {
-    handMarkerLastPos = null;
-    return;
-  }
-  if (handMarkerLastPos) {
-    const dx = hand.x - handMarkerLastPos.x;
-    const dy = hand.y - handMarkerLastPos.y;
-    if (Math.hypot(dx, dy) > 2) {
-      handMarkerHeading = Math.atan2(dy, dx);
+  const isPacman = currentScene === 'pacman';
+
+  // Pac-Man's cursor is a persistent point (computed in drawPacmanScene)
+  // that keeps rendering at its last position even while the hand is
+  // momentarily untracked, instead of disappearing. Every other scene
+  // hides the marker as soon as the hand is lost, same as before.
+  if (isPacman) {
+    if (pmCursorPxX === null) return;
+  } else {
+    if (!hand) {
+      handMarkerLastPos = null;
+      return;
     }
+    if (handMarkerLastPos) {
+      const dx = hand.x - handMarkerLastPos.x;
+      const dy = hand.y - handMarkerLastPos.y;
+      if (Math.hypot(dx, dy) > 2) {
+        handMarkerHeading = Math.atan2(dy, dx);
+      }
+    }
+    handMarkerLastPos = { x: hand.x, y: hand.y };
   }
-  handMarkerLastPos = { x: hand.x, y: hand.y };
 
   const pulse = 1 + Math.sin(now * 3) * 0.12;
-  // On the Pac-Man scene the cursor is confined to the board/open trails
-  // (computed in drawPacmanScene); everywhere else it's the raw hand position.
-  const useConfined = currentScene === 'pacman' && pmCursorPxX !== null;
-  const mx = useConfined ? pmCursorPxX : hand.x;
-  const my = useConfined ? pmCursorPxY : hand.y;
+  const mx = isPacman ? pmCursorPxX : hand.x;
+  const my = isPacman ? pmCursorPxY : hand.y;
 
   drawGlow(mx, my, 70 * pulse, 'rgba(255,255,180,0.4)');
   if (currentScene === 'flowers') {
@@ -900,6 +907,7 @@ const PM_SPEED = 3.0; // cells/sec - slower than before so there's a real reacti
 const PM_GHOST_SPEED = 2.4;
 const PM_TURN_TOLERANCE = 0.32; // how close to a cell center counts as "at an intersection" - wide enough that the ~100ms hand-tracking update interval reliably lands inside it
 const PM_QUEUE_DEADZONE = 0.45; // cells - ignore hand movement smaller than this so the queued direction doesn't flicker
+const PM_CURSOR_PULL_SPEED = 9; // cells/sec - how fast the cursor "catches up" to the hand, so it slides smoothly instead of jumping between corridors
 const PM_TUNNEL_ROW = 10; // left/right wraparound passage, classic Pac-Man style
 const PM_POWER_DURATION = 7;
 const PM_POWER_COLOR = '#2233dd';
@@ -913,6 +921,9 @@ let pmPowerUntil = 0;
 let pmPac = null;
 let pmGhosts = null;
 let pmQueuedDir = null; // persists across frames like a classic key-buffer, instead of being recomputed fresh every frame
+let pmCursorRow = null; // the smoothed, corridor-following cursor - persists across frames and hand dropouts
+let pmCursorCol = null;
+let pmHandWasPresent = false;
 let pmCaughtUntil = 0;
 let pmStarted = false;
 let pmScore = 0;
@@ -970,6 +981,16 @@ function pmWrapTunnel(entity) {
   else if (entity.col > PM_COLS - 0.5) entity.col = -0.5;
 }
 
+function pmCursorSnapToPacman() {
+  const aheadRow = pmPac.row + pmPac.dir.dr;
+  const aheadCol = pmPac.col + pmPac.dir.dc;
+  const inFront = !pmIsWall(aheadRow, aheadCol)
+    ? { row: aheadRow, col: aheadCol }
+    : { row: Math.round(pmPac.row), col: Math.round(pmPac.col) };
+  pmCursorRow = inFront.row;
+  pmCursorCol = inFront.col;
+}
+
 function pmResetPositions() {
   pmPac = { row: 12, col: 9, dir: { dr: 0, dc: 0 } }; // the "door" cell just below the ghost house
   pmGhosts = PM_GHOST_COLORS.map((color, i) => {
@@ -979,6 +1000,7 @@ function pmResetPositions() {
   pmStarted = false; // ghosts stay still until Pac-Man's first real move
   pmPowerUntil = 0;
   pmQueuedDir = null;
+  pmCursorSnapToPacman();
 }
 
 function pmInit() {
@@ -1029,22 +1051,42 @@ function drawPacmanScene(now, dt) {
 
   const caught = now < pmCaughtUntil;
 
-  // Confine the cursor to the board and its open trails - never floats over
-  // a wall block or off the edge - so Pac-Man is always being pointed
-  // somewhere it could plausibly walk to.
+  // The cursor is a persistent point that's smoothly "pulled" toward the
+  // hand (confined to the board/open trails) rather than snapping straight
+  // to the nearest open cell every frame - that instant re-snap was what
+  // caused it to visibly jump between parallel corridors. If the hand drops
+  // out, the cursor just freezes in place; when it comes back, the cursor
+  // re-anchors right in front of Pac-Man for a clean, predictable restart.
   if (hand) {
+    if (!pmHandWasPresent) pmCursorSnapToPacman();
+    pmHandWasPresent = true;
+
     const rawRow = (hand.y - offY) / tile;
     const rawCol = (hand.x - offX) / tile;
-    const cursor = pmNearestOpenCell(rawRow, rawCol);
-    pmCursorPxX = offX + (cursor.col + 0.5) * tile;
-    pmCursorPxY = offY + (cursor.row + 0.5) * tile;
+    const target = pmNearestOpenCell(rawRow, rawCol);
+
+    const pdr = target.row - pmCursorRow;
+    const pdc = target.col - pmCursorCol;
+    const pdist = Math.hypot(pdr, pdc);
+    if (pdist > 1e-4) {
+      const step = Math.min(1, (PM_CURSOR_PULL_SPEED * dt) / pdist);
+      pmCursorRow += pdr * step;
+      pmCursorCol += pdc * step;
+    }
+  } else {
+    pmHandWasPresent = false;
+  }
+
+  if (pmCursorRow !== null) {
+    pmCursorPxX = offX + (pmCursorCol + 0.5) * tile;
+    pmCursorPxY = offY + (pmCursorRow + 0.5) * tile;
 
     // Update the queued direction like a classic key-buffer: it only changes
     // on a clear signal (past the deadzone) and otherwise just persists,
-    // so a single stale/noisy hand sample right at an intersection can't
+    // so a single stale/noisy sample right at an intersection can't
     // silently cancel an already-intended turn.
-    const dr = cursor.row - pmPac.row;
-    const dc = cursor.col - pmPac.col;
+    const dr = pmCursorRow - pmPac.row;
+    const dc = pmCursorCol - pmPac.col;
     if (Math.hypot(dr, dc) > PM_QUEUE_DEADZONE) {
       pmQueuedDir = Math.abs(dc) > Math.abs(dr)
         ? { dr: 0, dc: dc > 0 ? 1 : -1 }
