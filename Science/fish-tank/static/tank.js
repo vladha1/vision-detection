@@ -197,8 +197,16 @@ let hand = null;
 async function syncHand() {
   try {
     const res = await fetch('/api/hand');
-    hand = toCanvasSpace(await res.json());
+    if (!res.ok) {
+      console.error('hand fetch bad status', res.status);
+      hand = null;
+      return;
+    }
+    const raw = await res.json();
+    hand = toCanvasSpace(raw);
+    if (DEBUG) console.log('hand raw', raw, 'canvas-space', hand, 'config', config);
   } catch (e) {
+    console.error('hand sync failed', e);
     hand = null;
   }
 }
