@@ -14,10 +14,15 @@ from fish_tank import WallTracker
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SPRITES_DIR = os.path.join(BASE_DIR, "sprites")
 STATE_PATH = os.path.join(BASE_DIR, "fish_state.json")
+SCENE_STATE_PATH = os.path.join(BASE_DIR, "scene_state.json")
 CALIBRATION_PATH = os.path.join(BASE_DIR, "calibration.json")
 
 MAX_FISH = 20
 PLAYABLE_HEIGHT_FRAC = 0.8
+
+# New scenes just need adding here + a matching branch in static/tank.js.
+AVAILABLE_SCENES = ["fish", "flowers"]
+DEFAULT_SCENE = "fish"
 
 DEFAULT_COLORS = [
     "#ff8c28", "#ff4646", "#5aaaff", "#ffd700", "#be5aff",
@@ -54,6 +59,20 @@ def load_state():
     return default_roster()
 
 
+def load_scene():
+    if os.path.exists(SCENE_STATE_PATH):
+        with open(SCENE_STATE_PATH) as f:
+            scene = json.load(f).get("scene")
+            if scene in AVAILABLE_SCENES:
+                return scene
+    return DEFAULT_SCENE
+
+
+def save_scene():
+    with open(SCENE_STATE_PATH, "w") as f:
+        json.dump({"scene": current_scene}, f)
+
+
 with open(CALIBRATION_PATH) as f:
     calib = json.load(f)
 
@@ -67,6 +86,9 @@ tracker.start()
 roster = load_state()
 if not os.path.exists(STATE_PATH):
     save_state()
+
+current_scene = load_scene()
+scene_lock = threading.Lock()
 
 app = Flask(__name__)
 
@@ -89,6 +111,30 @@ def sprites(filename):
 @app.route("/api/config")
 def api_config():
     return jsonify({"width": PROJECTOR_SIZE[0], "height": PROJECTOR_SIZE[1], "playable_height": PLAYABLE_HEIGHT})
+
+
+@app.route("/api/scenes")
+def api_scenes():
+    return jsonify(AVAILABLE_SCENES)
+
+
+@app.route("/api/scene")
+def api_scene_get():
+    with scene_lock:
+        return jsonify({"scene": current_scene})
+
+
+@app.route("/api/scene", methods=["POST"])
+def api_scene_set():
+    global current_scene
+    data = request.get_json(force=True, silent=True) or {}
+    scene = data.get("scene")
+    if scene not in AVAILABLE_SCENES:
+        return jsonify({"error": f"scene must be one of {AVAILABLE_SCENES}"}), 400
+    with scene_lock:
+        current_scene = scene
+        save_scene()
+    return jsonify({"scene": current_scene})
 
 
 @app.route("/api/hand")

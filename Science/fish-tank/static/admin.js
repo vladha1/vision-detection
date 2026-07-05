@@ -9,6 +9,41 @@ const fileInput = document.getElementById('fileInput');
 const preview = document.getElementById('preview');
 const dropHint = document.getElementById('dropHint');
 const submitBtn = document.getElementById('submitBtn');
+const sceneToggle = document.getElementById('sceneToggle');
+
+let availableScenes = [];
+let activeScene = null;
+
+async function loadScenes() {
+  const [scenesRes, currentRes] = await Promise.all([fetch('/api/scenes'), fetch('/api/scene')]);
+  availableScenes = await scenesRes.json();
+  activeScene = (await currentRes.json()).scene;
+  renderSceneToggle();
+}
+
+function renderSceneToggle() {
+  sceneToggle.innerHTML = '';
+  for (const scene of availableScenes) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = scene;
+    btn.className = scene === activeScene ? 'active' : '';
+    btn.onclick = () => setScene(scene);
+    sceneToggle.appendChild(btn);
+  }
+}
+
+async function setScene(scene) {
+  const res = await fetch('/api/scene', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scene }),
+  });
+  activeScene = (await res.json()).scene;
+  renderSceneToggle();
+}
+
+loadScenes();
 
 fileInput.addEventListener('change', () => showPreview(fileInput.files[0]));
 

@@ -234,9 +234,10 @@ function makeIntroFlowers(count) {
   return flowers;
 }
 
-function drawFlower(f, growth) {
+function drawFlower(f, growth, alpha = 1) {
   const r = f.maxRadius * growth;
   ctx.save();
+  ctx.globalAlpha = alpha;
   ctx.translate(f.x, f.y);
   ctx.rotate(f.rotation);
   for (let p = 0; p < f.petals; p++) {
@@ -271,17 +272,81 @@ function drawIntro(now) {
   ctx.globalAlpha = bgAlpha;
   ctx.fillStyle = '#03121f';
   ctx.fillRect(0, 0, W, H);
+  ctx.restore();
 
   for (const f of introFlowers) {
     const localT = t - f.delay;
     if (localT <= 0) continue;
     let growth = Math.min(1, localT / INTRO_BLOOM_SECONDS);
     growth = 1 - Math.pow(1 - growth, 3); // ease-out
-    drawFlower(f, growth);
+    drawFlower(f, growth, bgAlpha);
   }
-  ctx.restore();
   return true;
 }
+
+// --- persistent "flowers" scene: a continuously blooming/fading garden,
+// selectable from the admin page instead of the fish tank.
+const GARDEN_TARGET_COUNT = 16;
+const GARDEN_BLOOM_SECONDS = 1.4;
+const GARDEN_SPAWN_CHECK_SECONDS = 0.2;
+let gardenFlowers = [];
+let lastGardenSpawnCheck = 0;
+
+function spawnGardenFlower(now) {
+  gardenFlowers.push({
+    x: Math.random() * W,
+    y: Math.random() * H,
+    maxRadius: 30 + Math.random() * 50,
+    petals: 5 + Math.floor(Math.random() * 3),
+    color: FLOWER_COLORS[Math.floor(Math.random() * FLOWER_COLORS.length)],
+    rotation: Math.random() * Math.PI * 2,
+    bornAt: now,
+    hold: 2.5 + Math.random() * 3,
+    fade: 1.2 + Math.random() * 0.8,
+  });
+}
+
+function drawFlowerScene(now) {
+  ctx.fillStyle = '#03121f';
+  ctx.fillRect(0, 0, W, H);
+
+  if (gardenFlowers.length < GARDEN_TARGET_COUNT && now - lastGardenSpawnCheck > GARDEN_SPAWN_CHECK_SECONDS) {
+    lastGardenSpawnCheck = now;
+    if (Math.random() < 0.6) spawnGardenFlower(now);
+  }
+
+  gardenFlowers = gardenFlowers.filter((f) => {
+    const age = now - f.bornAt;
+    const total = GARDEN_BLOOM_SECONDS + f.hold + f.fade;
+    if (age > total) return false;
+
+    let growth, alpha;
+    if (age < GARDEN_BLOOM_SECONDS) {
+      growth = 1 - Math.pow(1 - age / GARDEN_BLOOM_SECONDS, 3);
+      alpha = growth;
+    } else if (age < GARDEN_BLOOM_SECONDS + f.hold) {
+      growth = 1;
+      alpha = 1;
+    } else {
+      growth = 1;
+      alpha = Math.max(0, 1 - (age - GARDEN_BLOOM_SECONDS - f.hold) / f.fade);
+    }
+    drawFlower(f, growth, alpha);
+    return true;
+  });
+}
+
+let currentScene = 'fish';
+async function syncScene() {
+  try {
+    const res = await fetch('/api/scene');
+    currentScene = (await res.json()).scene;
+  } catch (e) {
+    // keep last known scene
+  }
+}
+syncScene();
+setInterval(syncScene, 2000);
 
 let lastTime = performance.now();
 function frame(t) {
@@ -289,12 +354,15 @@ function frame(t) {
   lastTime = t;
   const now = t / 1000;
 
-  ctx.fillStyle = WATER_COLOR;
-  ctx.fillRect(0, 0, W, H);
-
-  for (const f of fishes) {
-    f.update(hand, now, dt);
-    f.draw();
+  if (currentScene === 'flowers') {
+    drawFlowerScene(now);
+  } else {
+    ctx.fillStyle = WATER_COLOR;
+    ctx.fillRect(0, 0, W, H);
+    for (const f of fishes) {
+      f.update(hand, now, dt);
+      f.draw();
+    }
   }
 
   if (introActive) {

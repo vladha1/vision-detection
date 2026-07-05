@@ -63,6 +63,14 @@
   .toggle-group label:has(input[value=seek]:checked) { border-color: var(--seek); background: #123a2a; }
   .toggle-group label:has(input[value=flee]:checked) { border-color: var(--flee); background: #3a1414; }
 
+  .scene-toggle { display: flex; gap: 8px; flex-wrap: wrap; }
+  .scene-toggle button {
+    flex: 1; min-width: 100px; padding: 10px; border-radius: 10px; border: 2px solid transparent;
+    background: var(--panel-2); color: var(--text); font-weight: 600; font-size: 14px;
+    cursor: pointer; text-transform: capitalize; transition: all 0.15s;
+  }
+  .scene-toggle button.active { border-color: var(--accent); background: #123049; }
+
   button.primary {
     width: 100%; padding: 12px; border: none; border-radius: 10px;
     background: var(--accent); color: #041018; font-weight: 700; font-size: 15px;
@@ -121,6 +129,11 @@
     <button type="submit" class="primary" id="submitBtn">Add fish</button>
   </form>
   <div id="status"></div>
+</div>
+
+<div class="upload-card">
+  <h2>Scene</h2>
+  <div class="scene-toggle" id="sceneToggle"></div>
 </div>
 
 <div class="grid" id="grid"></div>
