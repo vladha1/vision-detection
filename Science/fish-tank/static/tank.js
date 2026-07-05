@@ -561,19 +561,68 @@ function initButterflies() {
   }
 }
 
+const BUTTERFLY_LAND_CHANCE = 0.3;   // odds a wandering butterfly heads for a flower at each decision point
+const BUTTERFLY_FLEE_RADIUS = TOUCH_LEAN_RADIUS + 40; // hand distance from the flower that startles it off
+
 function updateAndDrawButterflies(now, dt) {
   const margin = 24;
   for (const b of butterflies) {
-    b.angle += Math.sin(now * 0.8 + b.wanderSeed) * dt * 1.6;
-    b.x += Math.cos(b.angle) * b.speed * dt;
-    b.y += Math.sin(b.angle) * b.speed * dt + Math.sin(now * 2 + b.wanderSeed) * 8 * dt;
+    if (b.nextDecisionAt === undefined) b.nextDecisionAt = now + 2 + Math.random() * 4;
 
-    if (b.x < margin) { b.x = margin; b.angle = Math.PI - b.angle; }
-    if (b.x > W - margin) { b.x = W - margin; b.angle = Math.PI - b.angle; }
-    if (b.y < margin) { b.y = margin; b.angle = -b.angle; }
-    if (b.y > H - margin) { b.y = H - margin; b.angle = -b.angle; }
+    if (b.state === 'landed') {
+      const stillThere = b.target && gardenFlowers.includes(b.target);
+      const satTooLong = now - b.landedAt > b.landedDuration;
+      const handTooClose = hand && b.target && dist(b.target, hand) < BUTTERFLY_FLEE_RADIUS;
+      if (!stillThere || satTooLong || handTooClose) {
+        b.state = 'wander';
+        b.nextDecisionAt = now + 3 + Math.random() * 4;
+        b.angle = handTooClose ? Math.atan2(b.y - hand.y, b.x - hand.x) : Math.random() * Math.PI * 2;
+        b.speed = handTooClose ? 90 + Math.random() * 30 : 26 + Math.random() * 22;
+        b.target = null;
+      } else {
+        b.x = b.target.x + b.sitOffset.x;
+        b.y = b.target.y + b.sitOffset.y;
+      }
+    } else if (b.state === 'seeking') {
+      if (!b.target || !gardenFlowers.includes(b.target)) {
+        b.state = 'wander';
+        b.target = null;
+      } else {
+        const dx = b.target.x - b.x, dy = b.target.y - b.y;
+        if (Math.hypot(dx, dy) < 16) {
+          b.state = 'landed';
+          b.landedAt = now;
+          b.landedDuration = 2.5 + Math.random() * 3;
+          b.sitOffset = { x: (Math.random() - 0.5) * 10, y: (Math.random() - 0.5) * 6 };
+        } else {
+          b.angle = Math.atan2(dy, dx);
+          b.speed = 34 + Math.random() * 10;
+        }
+      }
+    } else {
+      b.state = 'wander';
+      b.angle += Math.sin(now * 0.8 + b.wanderSeed) * dt * 1.6;
+      if (now > b.nextDecisionAt) {
+        b.nextDecisionAt = now + 3 + Math.random() * 4;
+        if (Math.random() < BUTTERFLY_LAND_CHANCE && gardenFlowers.length) {
+          b.target = gardenFlowers[Math.floor(Math.random() * gardenFlowers.length)];
+          b.state = 'seeking';
+        }
+      }
+    }
 
-    const flap = Math.abs(Math.sin(now * 14 + b.flapSeed));
+    if (b.state !== 'landed') {
+      b.x += Math.cos(b.angle) * b.speed * dt;
+      b.y += Math.sin(b.angle) * b.speed * dt + (b.state === 'wander' ? Math.sin(now * 2 + b.wanderSeed) * 8 * dt : 0);
+
+      if (b.x < margin) { b.x = margin; b.angle = Math.PI - b.angle; }
+      if (b.x > W - margin) { b.x = W - margin; b.angle = Math.PI - b.angle; }
+      if (b.y < margin) { b.y = margin; b.angle = -b.angle; }
+      if (b.y > H - margin) { b.y = H - margin; b.angle = -b.angle; }
+    }
+
+    const flapSpeed = b.state === 'landed' ? 4 : 14;
+    const flap = Math.abs(Math.sin(now * flapSpeed + b.flapSeed));
     const wingSpan = 10 + flap * 6;
     ctx.save();
     ctx.translate(b.x, b.y);
