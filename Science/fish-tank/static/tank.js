@@ -620,8 +620,23 @@ function drawGlow(x, y, radius, color) {
   ctx.restore();
 }
 
+let handMarkerHeading = 0;
+let handMarkerLastPos = null;
+
 function drawHandMarker(now) {
-  if (!hand) return;
+  if (!hand) {
+    handMarkerLastPos = null;
+    return;
+  }
+  if (handMarkerLastPos) {
+    const dx = hand.x - handMarkerLastPos.x;
+    const dy = hand.y - handMarkerLastPos.y;
+    if (Math.hypot(dx, dy) > 2) {
+      handMarkerHeading = Math.atan2(dy, dx);
+    }
+  }
+  handMarkerLastPos = { x: hand.x, y: hand.y };
+
   const pulse = 1 + Math.sin(now * 3) * 0.12;
   drawGlow(hand.x, hand.y, 70 * pulse, 'rgba(255,255,180,0.4)');
   if (currentScene === 'flowers') {
@@ -635,6 +650,7 @@ function drawHandMarker(now) {
     ctx.save();
     ctx.globalAlpha = 0.85;
     ctx.translate(hand.x, hand.y);
+    ctx.rotate(handMarkerHeading);
     ctx.drawImage(img, -iw / 2, -ih / 2, iw, ih);
     ctx.restore();
   }
