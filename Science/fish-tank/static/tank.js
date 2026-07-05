@@ -823,22 +823,30 @@ function drawHandMarker(now) {
     ctx.drawImage(img, -iw / 2, -ih / 2, iw, ih);
     ctx.restore();
   } else {
-    // pacman / driving: a plain target/crosshair so it's clear where the
-    // hand is being tracked, regardless of how that scene uses the position.
+    // pacman / driving: a bold, high-contrast crosshair (black outline behind
+    // a bright color) so it stays visible against any part of the scene.
+    const r = 22 * pulse;
+    const crossColor = '#39ff9d';
+    const arms = [[-1, 0], [1, 0], [0, -1], [0, 1]];
     ctx.save();
-    ctx.globalAlpha = 0.9;
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    const r = 14 * pulse;
-    ctx.beginPath();
-    ctx.arc(hand.x, hand.y, r, 0, Math.PI * 2);
-    ctx.stroke();
-    for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+    ctx.globalAlpha = 0.95;
+    for (const [strokeColor, width] of [['#000', 7], [crossColor, 3]]) {
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = width;
       ctx.beginPath();
-      ctx.moveTo(hand.x + dx * (r + 6), hand.y + dy * (r + 6));
-      ctx.lineTo(hand.x + dx * (r + 16), hand.y + dy * (r + 16));
+      ctx.arc(hand.x, hand.y, r, 0, Math.PI * 2);
       ctx.stroke();
+      for (const [dx, dy] of arms) {
+        ctx.beginPath();
+        ctx.moveTo(hand.x + dx * (r + 4), hand.y + dy * (r + 4));
+        ctx.lineTo(hand.x + dx * (r + 26), hand.y + dy * (r + 26));
+        ctx.stroke();
+      }
     }
+    ctx.fillStyle = crossColor;
+    ctx.beginPath();
+    ctx.arc(hand.x, hand.y, 4, 0, Math.PI * 2);
+    ctx.fill();
     ctx.restore();
 
     if (currentScene === 'pacman' && pmPac && (pmPac.dir.dr || pmPac.dir.dc)) {
@@ -959,15 +967,18 @@ function pmInit() {
   pmCaughtUntil = 0;
 }
 
-// Continuous, position-relative steering: whichever side of Pac-Man the hand
-// is currently on (not how it's moving) sets the queued direction, so it
-// keeps responding even while the hand is held still rather than swiping.
+// Continuous steering relative to the maze's center (a fixed reference
+// point, not Pac-Man's own moving position) - top half of the screen always
+// means "up", regardless of where Pac-Man currently is, which is a simpler
+// fixed mental map than tracking Pac-Man's position. Always snaps to
+// whichever axis (row or column) has the bigger offset from center, so the
+// other axis is effectively zeroed out - never diagonal.
 function pmReadHandInput(tile, offX, offY) {
   if (!hand) return;
   const handRow = (hand.y - offY) / tile;
   const handCol = (hand.x - offX) / tile;
-  const dr = handRow - pmPac.row;
-  const dc = handCol - pmPac.col;
+  const dr = handRow - (PM_ROWS - 1) / 2;
+  const dc = handCol - (PM_COLS - 1) / 2;
   if (Math.hypot(dr, dc) > 0.6) {
     pmPac.nextDir = Math.abs(dc) > Math.abs(dr)
       ? { dr: 0, dc: dc > 0 ? 1 : -1 }
