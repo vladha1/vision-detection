@@ -956,6 +956,7 @@ function pmResetPositions() {
   });
   pmStarted = false; // ghosts stay still until Pac-Man's first real move
   pmPowerUntil = 0;
+  pmHandLastPos = null;
 }
 
 function pmInit() {
@@ -967,22 +968,26 @@ function pmInit() {
   pmCaughtUntil = 0;
 }
 
-// Continuous steering relative to the maze's center (a fixed reference
-// point, not Pac-Man's own moving position) - top half of the screen always
-// means "up", regardless of where Pac-Man currently is, which is a simpler
-// fixed mental map than tracking Pac-Man's position. Always snaps to
-// whichever axis (row or column) has the bigger offset from center, so the
-// other axis is effectively zeroed out - never diagonal.
+// Swipe-based steering: direction follows the hand's last real movement,
+// ignoring small/jittery motion. The anchor point only moves once a swipe
+// big enough to register happens, so slow deliberate movement still
+// eventually crosses the threshold instead of endlessly resetting against
+// a constantly-drifting reference.
+let pmHandLastPos = null;
+
 function pmReadHandInput(tile, offX, offY) {
   if (!hand) return;
-  const handRow = (hand.y - offY) / tile;
-  const handCol = (hand.x - offX) / tile;
-  const dr = handRow - (PM_ROWS - 1) / 2;
-  const dc = handCol - (PM_COLS - 1) / 2;
-  if (Math.hypot(dr, dc) > 0.6) {
-    pmPac.nextDir = Math.abs(dc) > Math.abs(dr)
-      ? { dr: 0, dc: dc > 0 ? 1 : -1 }
-      : { dr: dr > 0 ? 1 : -1, dc: 0 };
+  if (!pmHandLastPos) {
+    pmHandLastPos = { x: hand.x, y: hand.y };
+    return;
+  }
+  const dx = hand.x - pmHandLastPos.x;
+  const dy = hand.y - pmHandLastPos.y;
+  if (Math.hypot(dx, dy) > tile * 0.5) {
+    pmPac.nextDir = Math.abs(dx) > Math.abs(dy)
+      ? { dr: 0, dc: dx > 0 ? 1 : -1 }
+      : { dr: dy > 0 ? 1 : -1, dc: 0 };
+    pmHandLastPos = { x: hand.x, y: hand.y };
   }
 }
 
