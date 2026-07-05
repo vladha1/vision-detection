@@ -18,7 +18,9 @@ SCENE_STATE_PATH = os.path.join(BASE_DIR, "scene_state.json")
 CALIBRATION_PATH = os.path.join(BASE_DIR, "calibration.json")
 
 MAX_FISH = 20
-PLAYABLE_HEIGHT_FRAC = 0.8
+# Was 0.8 to exclude the Mac's dock/menu bar when the projector mirrored the
+# desktop; not needed now that the tank runs as its own fullscreen browser page.
+PLAYABLE_HEIGHT_FRAC = 1.0
 
 # New scenes just need adding here + a matching branch in static/tank.js.
 AVAILABLE_SCENES = ["fish", "flowers"]

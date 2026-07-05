@@ -220,8 +220,6 @@ setInterval(syncFishList, 2000);
 syncHand();
 setInterval(syncHand, 100);
 
-const DEBUG = new URLSearchParams(location.search).has('debug');
-
 // --- entrance bloom: a field of flowers opens up when the page loads, then
 // fades away into the ordinary tank scene (teamLab "Flower Forest"-style).
 const FLOWER_COLORS = ['#ffb3c6', '#ffd166', '#ef476f', '#8bd3ff', '#c77dff', '#9be8b8'];
@@ -591,6 +589,34 @@ async function syncScene() {
 syncScene();
 setInterval(syncScene, 2000);
 
+// --- always-on hand marker: shows where the tracked hand is, styled to
+// match whichever scene is active (a small fish, or a small flower).
+const HAND_MARKER_COLOR = '#ffffff';
+let handMarkerFishSprite = null;
+function getHandMarkerFish() {
+  if (!handMarkerFishSprite) handMarkerFishSprite = proceduralSprite(HAND_MARKER_COLOR);
+  return handMarkerFishSprite;
+}
+
+function drawHandMarker(now) {
+  if (!hand) return;
+  const pulse = 1 + Math.sin(now * 3) * 0.12;
+  if (currentScene === 'flowers') {
+    const marker = { x: hand.x, y: hand.y, maxRadius: 24 * pulse, petals: 6, color: HAND_MARKER_COLOR, kind: 'daisy', rotation: now * 0.6 };
+    drawFlower(marker, 1, 0.85, 0);
+  } else {
+    const img = getHandMarkerFish();
+    const s = 0.45 * pulse;
+    const iw = (img.width || FISH_LENGTH) * s;
+    const ih = (img.height || FISH_LENGTH * 0.6) * s;
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.translate(hand.x, hand.y);
+    ctx.drawImage(img, -iw / 2, -ih / 2, iw, ih);
+    ctx.restore();
+  }
+}
+
 let lastTime = performance.now();
 function frame(t) {
   const dt = Math.min(0.05, (t - lastTime) / 1000);
@@ -612,19 +638,7 @@ function frame(t) {
     introActive = drawIntro(now);
   }
 
-  if (DEBUG) {
-    ctx.strokeStyle = '#787878';
-    ctx.beginPath();
-    ctx.moveTo(0, PLAYABLE_H);
-    ctx.lineTo(W, PLAYABLE_H);
-    ctx.stroke();
-    if (hand) {
-      ctx.fillStyle = '#ff00ff';
-      ctx.beginPath();
-      ctx.arc(hand.x, hand.y, 10, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
+  drawHandMarker(now);
 
   requestAnimationFrame(frame);
 }
