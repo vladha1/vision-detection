@@ -299,18 +299,25 @@ function drawIntro(now) {
 // --- persistent "flowers" scene: a continuously blooming/fading garden,
 // selectable from the admin page instead of the fish tank.
 const GARDEN_TARGET_COUNT = 16;
+const GARDEN_MAX_COUNT = 40; // safety cap so a lingering hand can't spawn forever
 const GARDEN_BLOOM_SECONDS = 1.4;
 const GARDEN_SPAWN_CHECK_SECONDS = 0.2;
 const WOBBLE_RADIUS = 380;    // how far a hand's presence reaches into the garden
 const WOBBLE_FREQ = 9;        // radians/sec - how fast flowers shiver
 const WOBBLE_AMOUNT = 0.16;   // radians - how far they shiver, kept subtle
+const REACTION_CHECK_SECONDS = 0.5; // how often we "roll the dice" while a hand is present
+const REACTION_NEARBY_RADIUS = WOBBLE_RADIUS;
+const REACTION_PATH_RADIUS = 140; // "in the way" distance for the dodge reaction
+const REACTION_MOVE_DURATION = 1.0;
 let gardenFlowers = [];
 let lastGardenSpawnCheck = 0;
+let lastReactionCheck = 0;
 
-function spawnGardenFlower(now) {
-  gardenFlowers.push({
-    x: Math.random() * W,
-    y: Math.random() * H,
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function makeGardenFlower(now, x, y) {
+  return {
+    x, y,
     maxRadius: 30 + Math.random() * 50,
     petals: 5 + Math.floor(Math.random() * 3),
     color: FLOWER_COLORS[Math.floor(Math.random() * FLOWER_COLORS.length)],
@@ -319,7 +326,44 @@ function spawnGardenFlower(now) {
     bornAt: now,
     hold: 2.5 + Math.random() * 3,
     fade: 1.2 + Math.random() * 0.8,
-  });
+  };
+}
+
+function spawnGardenFlower(now, x, y) {
+  gardenFlowers.push(makeGardenFlower(now, x !== undefined ? x : Math.random() * W, y !== undefined ? y : Math.random() * H));
+}
+
+function startMove(f, targetX, targetY, now, duration = REACTION_MOVE_DURATION) {
+  f.moveFrom = { x: f.x, y: f.y };
+  f.moveTo = { x: clamp(targetX, EDGE_MARGIN, W - EDGE_MARGIN), y: clamp(targetY, EDGE_MARGIN, H - EDGE_MARGIN) };
+  f.moveStart = now;
+  f.moveDuration = duration;
+}
+
+// While a hand lingers, occasionally: plant a new flower at the fingertip,
+// relocate a nearby one, or nudge one out of the way - or do nothing at all,
+// so the garden feels alive rather than mechanically responsive.
+function triggerHandReaction(now) {
+  if (gardenFlowers.length >= GARDEN_MAX_COUNT) return;
+  const roll = Math.random();
+  if (roll < 0.3) {
+    const jitter = 40;
+    spawnGardenFlower(now, hand.x + (Math.random() - 0.5) * jitter * 2, hand.y + (Math.random() - 0.5) * jitter * 2);
+  } else if (roll < 0.55) {
+    const nearby = gardenFlowers.filter(f => f.moveStart === undefined && dist(f, hand) < REACTION_NEARBY_RADIUS);
+    if (nearby.length) {
+      const f = nearby[Math.floor(Math.random() * nearby.length)];
+      startMove(f, Math.random() * W, Math.random() * H, now);
+    }
+  } else if (roll < 0.75) {
+    const inPath = gardenFlowers.filter(f => f.moveStart === undefined && dist(f, hand) < REACTION_PATH_RADIUS);
+    if (inPath.length) {
+      const f = inPath[0];
+      const away = norm(sub(f, hand));
+      startMove(f, f.x + away.x * 180, f.y + away.y * 180, now, 0.6);
+    }
+  }
+  // else: no reaction this round
 }
 
 function drawFlowerScene(now) {
@@ -331,10 +375,23 @@ function drawFlowerScene(now) {
     if (Math.random() < 0.6) spawnGardenFlower(now);
   }
 
+  if (hand && now - lastReactionCheck > REACTION_CHECK_SECONDS) {
+    lastReactionCheck = now;
+    triggerHandReaction(now);
+  }
+
   gardenFlowers = gardenFlowers.filter((f) => {
     const age = now - f.bornAt;
     const total = GARDEN_BLOOM_SECONDS + f.hold + f.fade;
     if (age > total) return false;
+
+    if (f.moveStart !== undefined) {
+      const mt = Math.min(1, (now - f.moveStart) / f.moveDuration);
+      const eased = 1 - Math.pow(1 - mt, 3);
+      f.x = f.moveFrom.x + (f.moveTo.x - f.moveFrom.x) * eased;
+      f.y = f.moveFrom.y + (f.moveTo.y - f.moveFrom.y) * eased;
+      if (mt >= 1) f.moveStart = undefined;
+    }
 
     let growth, alpha;
     if (age < GARDEN_BLOOM_SECONDS) {
