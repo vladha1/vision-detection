@@ -1,12 +1,55 @@
 const grid = document.getElementById('grid');
 const countEl = document.getElementById('count');
+const capacityFill = document.getElementById('capacityFill');
 const statusEl = document.getElementById('status');
+const MAX_FISH = 20;
+
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const preview = document.getElementById('preview');
+const dropHint = document.getElementById('dropHint');
+const submitBtn = document.getElementById('submitBtn');
+
+fileInput.addEventListener('change', () => showPreview(fileInput.files[0]));
+
+['dragover', 'dragenter'].forEach(evt =>
+  dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); })
+);
+['dragleave', 'drop'].forEach(evt =>
+  dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.remove('drag-over'); })
+);
+dropZone.addEventListener('drop', (e) => {
+  const file = e.dataTransfer.files[0];
+  if (file) {
+    fileInput.files = e.dataTransfer.files;
+    showPreview(file);
+  }
+});
+
+function showPreview(file) {
+  if (!file) return;
+  preview.src = URL.createObjectURL(file);
+  preview.style.display = 'block';
+  dropHint.textContent = file.name;
+}
+
+function setStatus(text, kind) {
+  statusEl.textContent = text;
+  statusEl.className = kind || '';
+}
 
 async function refresh() {
   const res = await fetch('/api/fish');
   const roster = await res.json();
   countEl.textContent = roster.length;
+  capacityFill.style.width = `${Math.min(100, (roster.length / MAX_FISH) * 100)}%`;
   grid.innerHTML = '';
+
+  if (roster.length === 0) {
+    grid.innerHTML = '<div class="empty">No fish yet - add one above!</div>';
+    return;
+  }
+
   for (const entry of roster) {
     const card = document.createElement('div');
     card.className = 'card';
@@ -22,21 +65,24 @@ async function refresh() {
       card.appendChild(swatch);
     }
 
-    const select = document.createElement('select');
+    const toggle = document.createElement('div');
+    toggle.className = 'badge-toggle';
     for (const [value, label] of [['seek', 'Attract'], ['flee', 'Repel']]) {
-      const opt = document.createElement('option');
-      opt.value = value;
-      opt.textContent = label;
-      if (entry.temperament === value) opt.selected = true;
-      select.appendChild(opt);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = value + (entry.temperament === value ? ' active' : '');
+      btn.textContent = label;
+      btn.onclick = () => setTemperament(entry.id, value);
+      toggle.appendChild(btn);
     }
-    select.onchange = () => setTemperament(entry.id, select.value);
-    card.appendChild(select);
+    card.appendChild(toggle);
 
     const del = document.createElement('button');
     del.className = 'delete';
     del.textContent = 'Delete';
-    del.onclick = () => deleteFish(entry.id);
+    del.onclick = () => {
+      if (confirm('Remove this fish from the tank?')) deleteFish(entry.id);
+    };
     card.appendChild(del);
 
     grid.appendChild(card);
@@ -49,6 +95,7 @@ async function setTemperament(id, temperament) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ temperament }),
   });
+  refresh();
 }
 
 async function deleteFish(id) {
@@ -60,19 +107,24 @@ document.getElementById('uploadForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;
   const data = new FormData(form);
-  statusEl.textContent = 'Uploading...';
+  submitBtn.disabled = true;
+  setStatus('Uploading...', '');
   try {
     const res = await fetch('/api/fish', { method: 'POST', body: data });
     const body = await res.json();
     if (res.ok) {
-      statusEl.textContent = 'Added!';
+      setStatus('Fish added!', 'ok');
       form.reset();
+      preview.style.display = 'none';
+      dropHint.textContent = 'Tap to take a photo or choose one from your library';
       refresh();
     } else {
-      statusEl.textContent = 'Error: ' + (body.error || res.status);
+      setStatus('Error: ' + (body.error || res.status), 'err');
     }
-  } catch (e) {
-    statusEl.textContent = 'Upload failed: ' + e;
+  } catch (err) {
+    setStatus('Upload failed: ' + err, 'err');
+  } finally {
+    submitBtn.disabled = false;
   }
 });
 

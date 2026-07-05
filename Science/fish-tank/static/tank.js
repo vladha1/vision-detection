@@ -210,6 +210,79 @@ setInterval(syncHand, 100);
 
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
+// --- entrance bloom: a field of flowers opens up when the page loads, then
+// fades away into the ordinary tank scene (teamLab "Flower Forest"-style).
+const FLOWER_COLORS = ['#ffb3c6', '#ffd166', '#ef476f', '#8bd3ff', '#c77dff', '#9be8b8'];
+const INTRO_BLOOM_SECONDS = 1.6;
+const INTRO_HOLD_SECONDS = 0.9;
+const INTRO_FADE_SECONDS = 1.4;
+const INTRO_MAX_DELAY = 1.1;
+
+function makeIntroFlowers(count) {
+  const flowers = [];
+  for (let i = 0; i < count; i++) {
+    flowers.push({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      maxRadius: 26 + Math.random() * 42,
+      petals: 5 + Math.floor(Math.random() * 3),
+      color: FLOWER_COLORS[Math.floor(Math.random() * FLOWER_COLORS.length)],
+      delay: Math.random() * INTRO_MAX_DELAY,
+      rotation: Math.random() * Math.PI * 2,
+    });
+  }
+  return flowers;
+}
+
+function drawFlower(f, growth) {
+  const r = f.maxRadius * growth;
+  ctx.save();
+  ctx.translate(f.x, f.y);
+  ctx.rotate(f.rotation);
+  for (let p = 0; p < f.petals; p++) {
+    ctx.save();
+    ctx.rotate((p / f.petals) * Math.PI * 2);
+    ctx.fillStyle = f.color;
+    ctx.beginPath();
+    ctx.ellipse(r * 0.55, 0, r * 0.5, r * 0.28, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.fillStyle = '#fff8e7';
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.28, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+const introFlowers = makeIntroFlowers(24);
+const introStart = performance.now() / 1000;
+let introActive = true;
+
+function drawIntro(now) {
+  const t = now - introStart;
+  const fadeStart = INTRO_MAX_DELAY + INTRO_BLOOM_SECONDS + INTRO_HOLD_SECONDS;
+  const fadeEnd = fadeStart + INTRO_FADE_SECONDS;
+  if (t > fadeEnd) return false;
+
+  const bgAlpha = t > fadeStart ? Math.max(0, 1 - (t - fadeStart) / INTRO_FADE_SECONDS) : 1;
+
+  ctx.save();
+  ctx.globalAlpha = bgAlpha;
+  ctx.fillStyle = '#03121f';
+  ctx.fillRect(0, 0, W, H);
+
+  for (const f of introFlowers) {
+    const localT = t - f.delay;
+    if (localT <= 0) continue;
+    let growth = Math.min(1, localT / INTRO_BLOOM_SECONDS);
+    growth = 1 - Math.pow(1 - growth, 3); // ease-out
+    drawFlower(f, growth);
+  }
+  ctx.restore();
+  return true;
+}
+
 let lastTime = performance.now();
 function frame(t) {
   const dt = Math.min(0.05, (t - lastTime) / 1000);
@@ -222,6 +295,10 @@ function frame(t) {
   for (const f of fishes) {
     f.update(hand, now, dt);
     f.draw();
+  }
+
+  if (introActive) {
+    introActive = drawIntro(now);
   }
 
   if (DEBUG) {
