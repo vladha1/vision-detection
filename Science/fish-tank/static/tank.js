@@ -194,6 +194,7 @@ async function syncFishList() {
 }
 
 let hand = null;
+let handWasSeen = false;
 async function syncHand() {
   try {
     const res = await fetch('/api/hand');
@@ -204,10 +205,13 @@ async function syncHand() {
     }
     const raw = await res.json();
     hand = toCanvasSpace(raw);
-    if (DEBUG) console.log('hand raw', raw, 'canvas-space', hand, 'config', config);
+    if (hand && !handWasSeen) console.log('hand detected', hand);
+    else if (!hand && handWasSeen) console.log('hand lost');
+    handWasSeen = !!hand;
   } catch (e) {
     console.error('hand sync failed', e);
     hand = null;
+    handWasSeen = false;
   }
 }
 
