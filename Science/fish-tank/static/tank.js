@@ -862,11 +862,39 @@ function drawHandMarker(now) {
 // Pac-Man scene: swipe your hand up/down/left/right to change direction,
 // like nudging a joystick, rather than pointing at an absolute position.
 // ============================================================================
+// Classic maze layout (adapted from Dale Harvey's well-known open-source
+// Pac-Man clone). 0=wall, 1=dot, 2=empty floor (no dot), 3=ghost-house
+// block (treated as wall here), 4=power pellet.
+const PM_RAW_MAP = [
+  [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  [0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+  [0, 4, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 4, 0],
+  [0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0],
+  [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+  [0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0],
+  [0, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0],
+  [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0],
+  [2, 2, 2, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 2, 2, 2],
+  [0, 0, 0, 0, 1, 0, 1, 0, 0, 3, 0, 0, 1, 0, 1, 0, 0, 0, 0],
+  [2, 2, 2, 2, 1, 1, 1, 0, 3, 3, 3, 0, 1, 1, 1, 2, 2, 2, 2],
+  [0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0],
+  [2, 2, 2, 0, 1, 0, 1, 1, 1, 2, 1, 1, 1, 0, 1, 0, 2, 2, 2],
+  [0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0],
+  [0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+  [0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0],
+  [0, 4, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 4, 0],
+  [0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0],
+  [0, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0],
+  [0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0],
+  [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+  [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+];
+
 const PM_COLS = 19;
-const PM_ROWS = 13;
+const PM_ROWS = PM_RAW_MAP.length;
 const PM_SPEED = 4.4; // cells/sec
 const PM_GHOST_SPEED = 3.6;
-const PM_TUNNEL_ROW = 6; // left/right wraparound passage, classic Pac-Man style
+const PM_TUNNEL_ROW = 10; // left/right wraparound passage, classic Pac-Man style
 const PM_POWER_DURATION = 7;
 const PM_POWER_COLOR = '#2233dd';
 const PM_WALL_COLOR = '#1a3fbf';
@@ -884,62 +912,18 @@ let pmScore = 0;
 let pmInitialized = false;
 
 function pmBuildMaze() {
-  const grid = [];
-  for (let r = 0; r < PM_ROWS; r++) {
-    const row = [];
-    for (let c = 0; c < PM_COLS; c++) {
-      row.push((r === 0 || r === PM_ROWS - 1 || c === 0 || c === PM_COLS - 1) ? 1 : 0);
-    }
-    grid.push(row);
-  }
-
-  const set = (r, c) => { if (r > 0 && r < PM_ROWS - 1 && c > 0 && c < PM_COLS - 1) grid[r][c] = 1; };
-  const hseg = (r, c0, c1) => { for (let c = c0; c <= c1; c++) set(r, c); };
-  const vseg = (r0, r1, c) => { for (let r = r0; r <= r1; r++) set(r, c); };
-  const box = (r0, c0, r1, c1) => { for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) set(r, c); };
-
-  // Thin partition walls (not thick blocks) so the maze reads as proper
-  // winding corridors rather than a few wide-open lanes. Verified fully
-  // connected (including the tunnel wraparound) via a flood-fill check.
-  hseg(2, 2, 4); hseg(2, 8, 10); hseg(2, 14, 16);
-  vseg(2, 3, 6); vseg(2, 3, 12);
-
-  hseg(4, 1, 3); hseg(4, 6, 7); hseg(4, 11, 12); hseg(4, 15, 17);
-  vseg(3, 4, 3); vseg(3, 4, 15);
-
-  box(5, 8, 7, 10); // center ghost house
-  vseg(5, 6, 2); vseg(5, 6, 16);
-  hseg(6, 4, 5); hseg(6, 13, 14);
-
-  hseg(8, 1, 3); hseg(8, 6, 7); hseg(8, 11, 12); hseg(8, 15, 17);
-  vseg(8, 9, 3); vseg(8, 9, 15);
-
-  hseg(10, 2, 4); hseg(10, 8, 10); hseg(10, 14, 16);
-  vseg(9, 10, 6); vseg(9, 10, 12);
-
-  grid[PM_TUNNEL_ROW][0] = 0;
-  grid[PM_TUNNEL_ROW][PM_COLS - 1] = 0;
-  return grid;
-}
-
-function pmPowerPelletCells() {
-  return [
-    { row: 1, col: 1 },
-    { row: 1, col: PM_COLS - 2 },
-    { row: PM_ROWS - 2, col: 1 },
-    { row: PM_ROWS - 2, col: PM_COLS - 2 },
-  ];
+  return PM_RAW_MAP.map(row => row.map(v => (v === 0 || v === 3) ? 1 : 0));
 }
 
 function pmResetDots() {
-  const powerKeys = new Set(pmPowerPelletCells().map(p => `${p.row},${p.col}`));
   pmDots = new Set();
-  for (let r = 1; r < PM_ROWS - 1; r++) {
-    for (let c = 1; c < PM_COLS - 1; c++) {
-      if (pmGrid[r][c] === 0 && !powerKeys.has(`${r},${c}`)) pmDots.add(`${r},${c}`);
+  pmPowerDots = new Set();
+  for (let r = 0; r < PM_ROWS; r++) {
+    for (let c = 0; c < PM_COLS; c++) {
+      if (PM_RAW_MAP[r][c] === 1) pmDots.add(`${r},${c}`);
+      else if (PM_RAW_MAP[r][c] === 4) pmPowerDots.add(`${r},${c}`);
     }
   }
-  pmPowerDots = powerKeys;
 }
 
 function pmIsWall(row, col) {
@@ -957,11 +941,9 @@ function pmWrapTunnel(entity) {
 }
 
 function pmResetPositions() {
-  pmPac = { row: 8, col: 9, dir: { dr: 0, dc: 0 }, nextDir: { dr: 0, dc: 0 } }; // just below the ghost house
+  pmPac = { row: 12, col: 9, dir: { dr: 0, dc: 0 }, nextDir: { dr: 0, dc: 0 } }; // the "door" cell just below the ghost house
   pmGhosts = PM_GHOST_COLORS.map((color, i) => {
-    // integer row/col so the "at an intersection" check triggers immediately
-    // and wall-aware direction selection kicks in right away
-    const homeRow = 1 + i, homeCol = PM_COLS - 2;
+    const homeRow = 8, homeCol = 8 + i; // spread across the open row just above the ghost house
     return { row: homeRow, col: homeCol, dir: { dr: 0, dc: -1 }, color, homeRow, homeCol };
   });
   pmStarted = false; // ghosts stay still until Pac-Man's first real move
