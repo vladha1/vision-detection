@@ -811,7 +811,7 @@ function drawHandMarker(now) {
   if (currentScene === 'flowers') {
     const marker = { x: hand.x, y: hand.y, maxRadius: 24 * pulse, petals: 6, color: HAND_MARKER_COLOR, kind: 'daisy', rotation: now * 0.6 };
     drawFlower(marker, 1, 0.85, 0);
-  } else {
+  } else if (currentScene === 'fish') {
     const img = getHandMarkerFish();
     const s = 0.45 * pulse;
     const iw = (img.width || FISH_LENGTH) * s;
@@ -822,6 +822,39 @@ function drawHandMarker(now) {
     ctx.rotate(handMarkerHeading);
     ctx.drawImage(img, -iw / 2, -ih / 2, iw, ih);
     ctx.restore();
+  } else {
+    // pacman / driving: a plain target/crosshair so it's clear where the
+    // hand is being tracked, regardless of how that scene uses the position.
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    const r = 14 * pulse;
+    ctx.beginPath();
+    ctx.arc(hand.x, hand.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+      ctx.beginPath();
+      ctx.moveTo(hand.x + dx * (r + 6), hand.y + dy * (r + 6));
+      ctx.lineTo(hand.x + dx * (r + 16), hand.y + dy * (r + 16));
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    if (currentScene === 'pacman' && pmPac && (pmPac.dir.dr || pmPac.dir.dc)) {
+      const arrowAngle = Math.atan2(pmPac.dir.dr, pmPac.dir.dc);
+      ctx.save();
+      ctx.translate(hand.x, hand.y);
+      ctx.rotate(arrowAngle);
+      ctx.fillStyle = '#ffd23f';
+      ctx.beginPath();
+      ctx.moveTo(r + 30, 0);
+      ctx.lineTo(r + 14, -8);
+      ctx.lineTo(r + 14, 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
   }
 }
 
@@ -1192,9 +1225,7 @@ function frame(t) {
     introActive = drawIntro(now);
   }
 
-  if (currentScene === 'fish' || currentScene === 'flowers') {
-    drawHandMarker(now);
-  }
+  drawHandMarker(now);
 
   requestAnimationFrame(frame);
 }
