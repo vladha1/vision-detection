@@ -225,10 +225,15 @@ const DEBUG = new URLSearchParams(location.search).has('debug');
 // --- entrance bloom: a field of flowers opens up when the page loads, then
 // fades away into the ordinary tank scene (teamLab "Flower Forest"-style).
 const FLOWER_COLORS = ['#ffb3c6', '#ffd166', '#ef476f', '#8bd3ff', '#c77dff', '#9be8b8'];
+const FLOWER_KINDS = ['daisy', 'star', 'cluster'];
 const INTRO_BLOOM_SECONDS = 1.6;
 const INTRO_HOLD_SECONDS = 0.9;
 const INTRO_FADE_SECONDS = 1.4;
 const INTRO_MAX_DELAY = 1.1;
+
+function randomKind() {
+  return FLOWER_KINDS[Math.floor(Math.random() * FLOWER_KINDS.length)];
+}
 
 function makeIntroFlowers(count) {
   const flowers = [];
@@ -236,14 +241,25 @@ function makeIntroFlowers(count) {
     flowers.push({
       x: Math.random() * W,
       y: Math.random() * H,
-      maxRadius: 26 + Math.random() * 42,
+      maxRadius: 18 + Math.random() * 58,
       petals: 5 + Math.floor(Math.random() * 3),
       color: FLOWER_COLORS[Math.floor(Math.random() * FLOWER_COLORS.length)],
+      kind: randomKind(),
       delay: Math.random() * INTRO_MAX_DELAY,
       rotation: Math.random() * Math.PI * 2,
     });
   }
   return flowers;
+}
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function lerpColor(hexA, hexB, t) {
+  const a = hexToRgb(hexA), b = hexToRgb(hexB);
+  return `rgb(${Math.round(a.r + (b.r - a.r) * t)},${Math.round(a.g + (b.g - a.g) * t)},${Math.round(a.b + (b.b - a.b) * t)})`;
 }
 
 function drawFlower(f, growth, alpha = 1, wobble = 0) {
@@ -252,15 +268,41 @@ function drawFlower(f, growth, alpha = 1, wobble = 0) {
   ctx.globalAlpha = alpha;
   ctx.translate(f.x, f.y);
   ctx.rotate(f.rotation + wobble);
-  for (let p = 0; p < f.petals; p++) {
-    ctx.save();
-    ctx.rotate((p / f.petals) * Math.PI * 2);
-    ctx.fillStyle = f.color;
-    ctx.beginPath();
-    ctx.ellipse(r * 0.55, 0, r * 0.5, r * 0.28, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+
+  if (f.kind === 'star') {
+    for (let p = 0; p < f.petals; p++) {
+      ctx.save();
+      ctx.rotate((p / f.petals) * Math.PI * 2);
+      ctx.fillStyle = f.color;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(r * 0.25, r * 0.14);
+      ctx.lineTo(r, 0);
+      ctx.lineTo(r * 0.25, -r * 0.14);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  } else if (f.kind === 'cluster') {
+    for (let p = 0; p < f.petals; p++) {
+      const ang = (p / f.petals) * Math.PI * 2;
+      ctx.fillStyle = f.color;
+      ctx.beginPath();
+      ctx.arc(Math.cos(ang) * r * 0.5, Math.sin(ang) * r * 0.5, r * 0.32, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else {
+    for (let p = 0; p < f.petals; p++) {
+      ctx.save();
+      ctx.rotate((p / f.petals) * Math.PI * 2);
+      ctx.fillStyle = f.color;
+      ctx.beginPath();
+      ctx.ellipse(r * 0.55, 0, r * 0.5, r * 0.28, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
   }
+
   ctx.fillStyle = '#fff8e7';
   ctx.beginPath();
   ctx.arc(0, 0, r * 0.28, 0, Math.PI * 2);
@@ -298,10 +340,10 @@ function drawIntro(now) {
 
 // --- persistent "flowers" scene: a continuously blooming/fading garden,
 // selectable from the admin page instead of the fish tank.
-const GARDEN_TARGET_COUNT = 16;
-const GARDEN_MAX_COUNT = 40; // safety cap so a lingering hand can't spawn forever
+const GARDEN_TARGET_COUNT = 30;
+const GARDEN_MAX_COUNT = 60; // safety cap so a lingering hand can't spawn forever
 const GARDEN_BLOOM_SECONDS = 1.4;
-const GARDEN_SPAWN_CHECK_SECONDS = 0.2;
+const GARDEN_SPAWN_CHECK_SECONDS = 0.15;
 const WOBBLE_RADIUS = 380;    // how far a hand's presence reaches into the garden
 const WOBBLE_FREQ = 9;        // radians/sec - how fast flowers shiver
 const WOBBLE_AMOUNT = 0.16;   // radians - how far they shiver, kept subtle
@@ -309,6 +351,7 @@ const REACTION_CHECK_SECONDS = 0.5; // how often we "roll the dice" while a hand
 const REACTION_NEARBY_RADIUS = WOBBLE_RADIUS;
 const REACTION_PATH_RADIUS = 140; // "in the way" distance for the dodge reaction
 const REACTION_MOVE_DURATION = 1.0;
+const REACTION_COLOR_DURATION = 0.8;
 let gardenFlowers = [];
 let lastGardenSpawnCheck = 0;
 let lastReactionCheck = 0;
@@ -318,9 +361,10 @@ function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function makeGardenFlower(now, x, y) {
   return {
     x, y,
-    maxRadius: 30 + Math.random() * 50,
+    maxRadius: 16 + Math.random() * 70, // wide size range - tiny buds to big blooms
     petals: 5 + Math.floor(Math.random() * 3),
     color: FLOWER_COLORS[Math.floor(Math.random() * FLOWER_COLORS.length)],
+    kind: randomKind(),
     rotation: Math.random() * Math.PI * 2,
     wobbleSeed: Math.random() * Math.PI * 2,
     bornAt: now,
@@ -341,34 +385,143 @@ function startMove(f, targetX, targetY, now, duration = REACTION_MOVE_DURATION) 
 }
 
 // While a hand lingers, occasionally: plant a new flower at the fingertip,
-// relocate a nearby one, or nudge one out of the way - or do nothing at all,
-// so the garden feels alive rather than mechanically responsive.
+// relocate a nearby one, nudge one out of the way, recolor one - or do
+// nothing at all, so the garden feels alive rather than mechanically
+// responsive.
 function triggerHandReaction(now) {
   if (gardenFlowers.length >= GARDEN_MAX_COUNT) return;
   const roll = Math.random();
-  if (roll < 0.3) {
+  if (roll < 0.25) {
     const jitter = 40;
     spawnGardenFlower(now, hand.x + (Math.random() - 0.5) * jitter * 2, hand.y + (Math.random() - 0.5) * jitter * 2);
-  } else if (roll < 0.55) {
+  } else if (roll < 0.45) {
     const nearby = gardenFlowers.filter(f => f.moveStart === undefined && dist(f, hand) < REACTION_NEARBY_RADIUS);
     if (nearby.length) {
       const f = nearby[Math.floor(Math.random() * nearby.length)];
       startMove(f, Math.random() * W, Math.random() * H, now);
     }
-  } else if (roll < 0.75) {
+  } else if (roll < 0.65) {
     const inPath = gardenFlowers.filter(f => f.moveStart === undefined && dist(f, hand) < REACTION_PATH_RADIUS);
     if (inPath.length) {
       const f = inPath[0];
       const away = norm(sub(f, hand));
       startMove(f, f.x + away.x * 180, f.y + away.y * 180, now, 0.6);
     }
+  } else if (roll < 0.9) {
+    const nearby = gardenFlowers.filter(f => f.colorChangeStart === undefined && dist(f, hand) < REACTION_NEARBY_RADIUS);
+    if (nearby.length) {
+      const f = nearby[Math.floor(Math.random() * nearby.length)];
+      let nextColor = f.color;
+      while (nextColor === f.color) nextColor = FLOWER_COLORS[Math.floor(Math.random() * FLOWER_COLORS.length)];
+      f.colorFrom = f.color;
+      f.colorTo = nextColor;
+      f.colorChangeStart = now;
+    }
   }
   // else: no reaction this round
 }
 
-function drawFlowerScene(now) {
+// --- ground filler: grass tufts (static positions, gentle sway) so the
+// garden reads as full even between flower blooms.
+const GRASS_COLOR = '#2e7d4f';
+let grassBlades = [];
+
+function initGrass() {
+  grassBlades = [];
+  const count = Math.max(20, Math.floor(W / 16));
+  for (let i = 0; i < count; i++) {
+    grassBlades.push({
+      x: (i / count) * W + (Math.random() - 0.5) * 16,
+      height: 20 + Math.random() * 34,
+      width: 3 + Math.random() * 3,
+      lean: (Math.random() - 0.5) * 0.4,
+      swaySeed: Math.random() * Math.PI * 2,
+      swaySpeed: 0.5 + Math.random() * 0.5,
+    });
+  }
+}
+
+function drawGrass(now) {
+  const baseline = H - 6;
+  ctx.strokeStyle = GRASS_COLOR;
+  ctx.lineCap = 'round';
+  for (const b of grassBlades) {
+    const sway = Math.sin(now * b.swaySpeed + b.swaySeed) * 0.3;
+    ctx.lineWidth = b.width;
+    ctx.beginPath();
+    ctx.moveTo(b.x, baseline);
+    const midX = b.x + (sway + b.lean) * b.height * 0.4;
+    const tipX = b.x + (sway * 1.6 + b.lean) * b.height * 0.7;
+    ctx.quadraticCurveTo(midX, baseline - b.height * 0.55, tipX, baseline - b.height);
+    ctx.stroke();
+  }
+}
+
+// --- butterflies: a small ambient population that flutters around
+// continuously, independent of the flower lifecycle.
+const BUTTERFLY_COLORS = ['#fff176', '#ff8a65', '#ba68c8', '#4fc3f7', '#f06292'];
+const BUTTERFLY_COUNT = 6;
+let butterflies = [];
+
+function initButterflies() {
+  butterflies = [];
+  for (let i = 0; i < BUTTERFLY_COUNT; i++) {
+    butterflies.push({
+      x: Math.random() * W,
+      y: Math.random() * H * 0.7,
+      angle: Math.random() * Math.PI * 2,
+      speed: 26 + Math.random() * 22,
+      color: BUTTERFLY_COLORS[Math.floor(Math.random() * BUTTERFLY_COLORS.length)],
+      wanderSeed: Math.random() * Math.PI * 2,
+      flapSeed: Math.random() * Math.PI * 2,
+    });
+  }
+}
+
+function updateAndDrawButterflies(now, dt) {
+  const margin = 24;
+  for (const b of butterflies) {
+    b.angle += Math.sin(now * 0.8 + b.wanderSeed) * dt * 1.6;
+    b.x += Math.cos(b.angle) * b.speed * dt;
+    b.y += Math.sin(b.angle) * b.speed * dt + Math.sin(now * 2 + b.wanderSeed) * 8 * dt;
+
+    if (b.x < margin) { b.x = margin; b.angle = Math.PI - b.angle; }
+    if (b.x > W - margin) { b.x = W - margin; b.angle = Math.PI - b.angle; }
+    if (b.y < margin) { b.y = margin; b.angle = -b.angle; }
+    if (b.y > H - margin) { b.y = H - margin; b.angle = -b.angle; }
+
+    const flap = Math.abs(Math.sin(now * 14 + b.flapSeed));
+    const wingSpan = 10 + flap * 6;
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    ctx.rotate(b.angle);
+    ctx.fillStyle = b.color;
+    ctx.beginPath();
+    ctx.ellipse(-4, 0, wingSpan * 0.5, wingSpan * 0.32, 0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(4, 0, wingSpan * 0.5, wingSpan * 0.32, -0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#3a2a1a';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 2, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+let gardenInitialized = false;
+
+function drawFlowerScene(now, dt) {
+  if (!gardenInitialized) {
+    gardenInitialized = true;
+    initGrass();
+    initButterflies();
+  }
+
   ctx.fillStyle = '#03121f';
   ctx.fillRect(0, 0, W, H);
+  drawGrass(now);
 
   if (gardenFlowers.length < GARDEN_TARGET_COUNT && now - lastGardenSpawnCheck > GARDEN_SPAWN_CHECK_SECONDS) {
     lastGardenSpawnCheck = now;
@@ -391,6 +544,12 @@ function drawFlowerScene(now) {
       f.x = f.moveFrom.x + (f.moveTo.x - f.moveFrom.x) * eased;
       f.y = f.moveFrom.y + (f.moveTo.y - f.moveFrom.y) * eased;
       if (mt >= 1) f.moveStart = undefined;
+    }
+
+    if (f.colorChangeStart !== undefined) {
+      const ct = Math.min(1, (now - f.colorChangeStart) / REACTION_COLOR_DURATION);
+      f.color = lerpColor(f.colorFrom, f.colorTo, ct);
+      if (ct >= 1) f.colorChangeStart = undefined;
     }
 
     let growth, alpha;
@@ -416,6 +575,8 @@ function drawFlowerScene(now) {
     drawFlower(f, growth, alpha, wobble);
     return true;
   });
+
+  updateAndDrawButterflies(now, dt);
 }
 
 let currentScene = 'fish';
@@ -437,7 +598,7 @@ function frame(t) {
   const now = t / 1000;
 
   if (currentScene === 'flowers') {
-    drawFlowerScene(now);
+    drawFlowerScene(now, dt);
   } else {
     ctx.fillStyle = WATER_COLOR;
     ctx.fillRect(0, 0, W, H);
