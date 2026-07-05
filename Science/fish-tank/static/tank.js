@@ -444,7 +444,15 @@ function drawGrass(now) {
   ctx.strokeStyle = GRASS_COLOR;
   ctx.lineCap = 'round';
   for (const b of grassBlades) {
-    const sway = Math.sin(now * b.swaySpeed + b.swaySeed) * 0.3;
+    let gust = 0;
+    if (hand) {
+      const d = Math.hypot(b.x - hand.x, baseline - b.height * 0.5 - hand.y);
+      if (d < WOBBLE_RADIUS) {
+        const intensity = 1 - d / WOBBLE_RADIUS;
+        gust = Math.sin(now * WOBBLE_FREQ + b.swaySeed) * 0.6 * intensity;
+      }
+    }
+    const sway = Math.sin(now * b.swaySpeed + b.swaySeed) * 0.3 + gust;
     ctx.lineWidth = b.width;
     ctx.beginPath();
     ctx.moveTo(b.x, baseline);
@@ -568,6 +576,8 @@ function drawFlowerScene(now, dt) {
       if (d < WOBBLE_RADIUS) {
         const intensity = 1 - d / WOBBLE_RADIUS;
         wobble = Math.sin(now * WOBBLE_FREQ + f.wobbleSeed) * WOBBLE_AMOUNT * intensity;
+        // pulse size too - a rotation shiver alone is easy to miss among many flowers
+        growth *= 1 + Math.sin(now * WOBBLE_FREQ + f.wobbleSeed) * 0.22 * intensity;
       }
     }
     drawFlower(f, growth, alpha, wobble);
@@ -598,9 +608,22 @@ function getHandMarkerFish() {
   return handMarkerFishSprite;
 }
 
+function drawGlow(x, y, radius, color) {
+  const grad = ctx.createRadialGradient(x, y, 0, x, y, radius);
+  grad.addColorStop(0, color);
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.save();
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawHandMarker(now) {
   if (!hand) return;
   const pulse = 1 + Math.sin(now * 3) * 0.12;
+  drawGlow(hand.x, hand.y, 70 * pulse, 'rgba(255,255,180,0.4)');
   if (currentScene === 'flowers') {
     const marker = { x: hand.x, y: hand.y, maxRadius: 24 * pulse, petals: 6, color: HAND_MARKER_COLOR, kind: 'daisy', rotation: now * 0.6 };
     drawFlower(marker, 1, 0.85, 0);
