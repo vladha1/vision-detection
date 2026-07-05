@@ -896,8 +896,10 @@ const PM_RAW_MAP = [
 
 const PM_COLS = 19;
 const PM_ROWS = PM_RAW_MAP.length;
-const PM_SPEED = 4.4; // cells/sec
-const PM_GHOST_SPEED = 3.6;
+const PM_SPEED = 3.0; // cells/sec - slower than before so there's a real reaction window
+const PM_GHOST_SPEED = 2.4;
+const PM_TURN_TOLERANCE = 0.32; // how close to a cell center counts as "at an intersection" - wide enough that the ~100ms hand-tracking update interval reliably lands inside it
+const PM_QUEUE_DEADZONE = 0.45; // cells - ignore hand movement smaller than this so the queued direction doesn't flicker
 const PM_TUNNEL_ROW = 10; // left/right wraparound passage, classic Pac-Man style
 const PM_POWER_DURATION = 7;
 const PM_POWER_COLOR = '#2233dd';
@@ -910,6 +912,7 @@ let pmPowerDots = null;
 let pmPowerUntil = 0;
 let pmPac = null;
 let pmGhosts = null;
+let pmQueuedDir = null; // persists across frames like a classic key-buffer, instead of being recomputed fresh every frame
 let pmCaughtUntil = 0;
 let pmStarted = false;
 let pmScore = 0;
@@ -975,6 +978,7 @@ function pmResetPositions() {
   });
   pmStarted = false; // ghosts stay still until Pac-Man's first real move
   pmPowerUntil = 0;
+  pmQueuedDir = null;
 }
 
 function pmInit() {
@@ -1028,7 +1032,6 @@ function drawPacmanScene(now, dt) {
   // Confine the cursor to the board and its open trails - never floats over
   // a wall block or off the edge - so Pac-Man is always being pointed
   // somewhere it could plausibly walk to.
-  let desiredDir = null;
   if (hand) {
     const rawRow = (hand.y - offY) / tile;
     const rawCol = (hand.x - offX) / tile;
@@ -1036,10 +1039,14 @@ function drawPacmanScene(now, dt) {
     pmCursorPxX = offX + (cursor.col + 0.5) * tile;
     pmCursorPxY = offY + (cursor.row + 0.5) * tile;
 
+    // Update the queued direction like a classic key-buffer: it only changes
+    // on a clear signal (past the deadzone) and otherwise just persists,
+    // so a single stale/noisy hand sample right at an intersection can't
+    // silently cancel an already-intended turn.
     const dr = cursor.row - pmPac.row;
     const dc = cursor.col - pmPac.col;
-    if (Math.hypot(dr, dc) > 0.3) {
-      desiredDir = Math.abs(dc) > Math.abs(dr)
+    if (Math.hypot(dr, dc) > PM_QUEUE_DEADZONE) {
+      pmQueuedDir = Math.abs(dc) > Math.abs(dr)
         ? { dr: 0, dc: dc > 0 ? 1 : -1 }
         : { dr: dr > 0 ? 1 : -1, dc: 0 };
     }
@@ -1049,14 +1056,15 @@ function drawPacmanScene(now, dt) {
   }
 
   if (!caught) {
-
-    const atRow = Math.abs(pmPac.row - Math.round(pmPac.row)) < 0.15;
-    const atCol = Math.abs(pmPac.col - Math.round(pmPac.col)) < 0.15;
-    if (desiredDir && atRow && atCol) {
+    // Wide intersection window (not a narrow instant) so it reliably
+    // overlaps with the hand tracker's ~100ms update interval.
+    const atRow = Math.abs(pmPac.row - Math.round(pmPac.row)) < PM_TURN_TOLERANCE;
+    const atCol = Math.abs(pmPac.col - Math.round(pmPac.col)) < PM_TURN_TOLERANCE;
+    if (pmQueuedDir && atRow && atCol) {
       const r = Math.round(pmPac.row), c = Math.round(pmPac.col);
-      const changing = desiredDir.dr !== pmPac.dir.dr || desiredDir.dc !== pmPac.dir.dc;
-      if (changing && !pmIsWall(r + desiredDir.dr, c + desiredDir.dc)) {
-        pmPac.dir = desiredDir;
+      const changing = pmQueuedDir.dr !== pmPac.dir.dr || pmQueuedDir.dc !== pmPac.dir.dc;
+      if (changing && !pmIsWall(r + pmQueuedDir.dr, c + pmQueuedDir.dc)) {
+        pmPac.dir = pmQueuedDir;
         pmPac.row = r; pmPac.col = c;
         pmStarted = true;
       }
@@ -1080,7 +1088,7 @@ function drawPacmanScene(now, dt) {
         // prefer any real turn over reversing - only reverse if that's the
         // only option left (a genuine dead end)
         const nonReverse = options.filter(d => !(d.dr === reverseDir.dr && d.dc === reverseDir.dc));
-        const preferred = desiredDir && options.find(o => o.dr === desiredDir.dr && o.dc === desiredDir.dc);
+        const preferred = pmQueuedDir && options.find(o => o.dr === pmQueuedDir.dr && o.dc === pmQueuedDir.dc);
         if (preferred) pmPac.dir = preferred;
         else if (nonReverse.length) pmPac.dir = nonReverse[Math.floor(Math.random() * nonReverse.length)];
         else if (options.length) pmPac.dir = options[0];
