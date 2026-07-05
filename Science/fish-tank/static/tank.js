@@ -825,6 +825,348 @@ function drawHandMarker(now) {
   }
 }
 
+// ============================================================================
+// Pac-Man scene: swipe your hand up/down/left/right to change direction,
+// like nudging a joystick, rather than pointing at an absolute position.
+// ============================================================================
+const PM_COLS = 19;
+const PM_ROWS = 13;
+const PM_SPEED = 4.4; // cells/sec
+const PM_GHOST_SPEED = 3.6;
+const PM_WALL_COLOR = '#1a3fbf';
+const PM_GHOST_COLORS = ['#ff4d4d', '#ffb3f0', '#66e0ff'];
+
+let pmGrid = null;
+let pmDots = null;
+let pmPac = null;
+let pmGhosts = null;
+let pmHandLastPos = null;
+let pmCaughtUntil = 0;
+let pmScore = 0;
+let pmInitialized = false;
+
+function pmBuildMaze() {
+  const grid = [];
+  for (let r = 0; r < PM_ROWS; r++) {
+    const row = [];
+    for (let c = 0; c < PM_COLS; c++) {
+      row.push((r === 0 || r === PM_ROWS - 1 || c === 0 || c === PM_COLS - 1) ? 1 : 0);
+    }
+    grid.push(row);
+  }
+  const blocks = [
+    [2, 2, 3, 4], [2, PM_COLS - 5, 3, PM_COLS - 3], [2, 8, 3, 10],
+    [5, 2, 7, 3], [5, PM_COLS - 4, 7, PM_COLS - 3],
+    [5, 6, 6, 8], [5, PM_COLS - 9, 6, PM_COLS - 7],
+    [9, 2, 10, 4], [9, PM_COLS - 5, 10, PM_COLS - 3], [9, 8, 10, 10],
+  ];
+  for (const [r0, c0, r1, c1] of blocks) {
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        if (r > 0 && r < PM_ROWS - 1 && c > 0 && c < PM_COLS - 1) grid[r][c] = 1;
+      }
+    }
+  }
+  return grid;
+}
+
+function pmFillDots() {
+  pmDots = new Set();
+  for (let r = 1; r < PM_ROWS - 1; r++) {
+    for (let c = 1; c < PM_COLS - 1; c++) {
+      if (pmGrid[r][c] === 0) pmDots.add(`${r},${c}`);
+    }
+  }
+}
+
+function pmIsWall(row, col) {
+  const r = Math.round(row), c = Math.round(col);
+  if (r < 0 || r >= PM_ROWS || c < 0 || c >= PM_COLS) return true;
+  return pmGrid[r][c] === 1;
+}
+
+function pmResetPositions() {
+  pmPac = { row: 6, col: 9, dir: { dr: 0, dc: 0 }, nextDir: { dr: 0, dc: 0 } };
+  pmGhosts = PM_GHOST_COLORS.map((color, i) => ({
+    row: 1.5 + i * 0.6, col: PM_COLS - 2, dir: { dr: 0, dc: -1 }, color,
+  }));
+}
+
+function pmInit() {
+  pmInitialized = true;
+  pmGrid = pmBuildMaze();
+  pmFillDots();
+  pmResetPositions();
+  pmScore = 0;
+  pmCaughtUntil = 0;
+  pmHandLastPos = null;
+}
+
+function pmReadHandInput() {
+  if (!hand) return;
+  if (pmHandLastPos) {
+    const dx = hand.x - pmHandLastPos.x;
+    const dy = hand.y - pmHandLastPos.y;
+    if (Math.hypot(dx, dy) > 7) {
+      pmPac.nextDir = Math.abs(dx) > Math.abs(dy)
+        ? { dr: 0, dc: dx > 0 ? 1 : -1 }
+        : { dr: dy > 0 ? 1 : -1, dc: 0 };
+    }
+  }
+  pmHandLastPos = { x: hand.x, y: hand.y };
+}
+
+function pmMoveGhost(g, dt) {
+  const atCenter = Math.abs(g.row - Math.round(g.row)) < 0.1 && Math.abs(g.col - Math.round(g.col)) < 0.1;
+  if (atCenter) {
+    const r = Math.round(g.row), c = Math.round(g.col);
+    const options = [{ dr: -1, dc: 0 }, { dr: 1, dc: 0 }, { dr: 0, dc: -1 }, { dr: 0, dc: 1 }]
+      .filter(d => !pmIsWall(r + d.dr, c + d.dc) && !(d.dr === -g.dir.dr && d.dc === -g.dir.dc));
+    if (options.length) {
+      g.row = r; g.col = c;
+      if (Math.random() < 0.6) {
+        options.sort((a, b) => {
+          const da = Math.hypot((r + a.dr) - pmPac.row, (c + a.dc) - pmPac.col);
+          const db = Math.hypot((r + b.dr) - pmPac.row, (c + b.dc) - pmPac.col);
+          return da - db;
+        });
+        g.dir = options[0];
+      } else {
+        g.dir = options[Math.floor(Math.random() * options.length)];
+      }
+    }
+  }
+  g.row += g.dir.dr * PM_GHOST_SPEED * dt;
+  g.col += g.dir.dc * PM_GHOST_SPEED * dt;
+}
+
+function drawPacmanScene(now, dt) {
+  if (!pmInitialized) pmInit();
+
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  const tile = Math.min(W / PM_COLS, H / PM_ROWS);
+  const offX = (W - tile * PM_COLS) / 2;
+  const offY = (H - tile * PM_ROWS) / 2;
+  const toPx = (row, col) => ({ x: offX + col * tile, y: offY + row * tile });
+
+  const caught = now < pmCaughtUntil;
+
+  if (!caught) {
+    pmReadHandInput();
+
+    const atRow = Math.abs(pmPac.row - Math.round(pmPac.row)) < 0.15;
+    const atCol = Math.abs(pmPac.col - Math.round(pmPac.col)) < 0.15;
+    if ((pmPac.nextDir.dr || pmPac.nextDir.dc) && atRow && atCol) {
+      const r = Math.round(pmPac.row), c = Math.round(pmPac.col);
+      if (!pmIsWall(r + pmPac.nextDir.dr, c + pmPac.nextDir.dc)) {
+        pmPac.dir = pmPac.nextDir;
+        pmPac.row = r; pmPac.col = c;
+      }
+    }
+    if (pmPac.dir.dr || pmPac.dir.dc) {
+      const aheadRow = pmPac.row + pmPac.dir.dr * 0.55;
+      const aheadCol = pmPac.col + pmPac.dir.dc * 0.55;
+      if (!pmIsWall(aheadRow, aheadCol)) {
+        pmPac.row += pmPac.dir.dr * PM_SPEED * dt;
+        pmPac.col += pmPac.dir.dc * PM_SPEED * dt;
+      } else {
+        pmPac.row = Math.round(pmPac.row);
+        pmPac.col = Math.round(pmPac.col);
+        pmPac.dir = { dr: 0, dc: 0 };
+      }
+    }
+
+    const key = `${Math.round(pmPac.row)},${Math.round(pmPac.col)}`;
+    if (pmDots.has(key)) { pmDots.delete(key); pmScore++; }
+    if (pmDots.size === 0) { pmFillDots(); }
+
+    for (const g of pmGhosts) pmMoveGhost(g, dt);
+    for (const g of pmGhosts) {
+      if (Math.hypot(g.row - pmPac.row, g.col - pmPac.col) < 0.6) {
+        pmCaughtUntil = now + 1.4;
+        pmResetPositions();
+        break;
+      }
+    }
+  }
+
+  // walls
+  ctx.fillStyle = PM_WALL_COLOR;
+  for (let r = 0; r < PM_ROWS; r++) {
+    for (let c = 0; c < PM_COLS; c++) {
+      if (pmGrid[r][c] === 1) {
+        const p = toPx(r, c);
+        ctx.fillRect(p.x + 1, p.y + 1, tile - 2, tile - 2);
+      }
+    }
+  }
+
+  // dots
+  ctx.fillStyle = '#ffe9a8';
+  for (const key of pmDots) {
+    const [r, c] = key.split(',').map(Number);
+    const p = toPx(r, c);
+    ctx.beginPath();
+    ctx.arc(p.x + tile / 2, p.y + tile / 2, tile * 0.08, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // ghosts
+  for (const g of pmGhosts) {
+    const p = toPx(g.row, g.col);
+    const cx = p.x + tile / 2, cy = p.y + tile / 2;
+    const gr = tile * 0.42;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.fillStyle = g.color;
+    ctx.beginPath();
+    ctx.arc(0, 0, gr, Math.PI, 0);
+    ctx.lineTo(gr, gr * 0.7);
+    for (let i = 0; i < 4; i++) {
+      ctx.lineTo(gr - (i + 0.5) * (gr / 2), i % 2 === 0 ? gr * 0.35 : gr * 0.7);
+    }
+    ctx.lineTo(-gr, gr * 0.7);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(-gr * 0.35, -gr * 0.1, gr * 0.22, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(gr * 0.35, -gr * 0.1, gr * 0.22, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#1a1a3a';
+    const lookX = Math.sign(g.dir.dc) * gr * 0.08, lookY = Math.sign(g.dir.dr) * gr * 0.08;
+    ctx.beginPath(); ctx.arc(-gr * 0.35 + lookX, -gr * 0.1 + lookY, gr * 0.1, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(gr * 0.35 + lookX, -gr * 0.1 + lookY, gr * 0.1, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  // pac-man
+  {
+    const p = toPx(pmPac.row, pmPac.col);
+    const cx = p.x + tile / 2, cy = p.y + tile / 2;
+    const pr = tile * 0.42;
+    const angle = pmPac.dir.dc || pmPac.dir.dr
+      ? Math.atan2(pmPac.dir.dr, pmPac.dir.dc)
+      : 0;
+    const mouth = caught ? 0.5 : (Math.abs(Math.sin(now * 9)) * 0.28);
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+    ctx.fillStyle = '#ffd23f';
+    ctx.beginPath();
+    ctx.arc(0, 0, pr, mouth * Math.PI, (2 - mouth) * Math.PI);
+    ctx.lineTo(0, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  ctx.fillStyle = '#fff';
+  ctx.font = `${Math.round(tile * 0.5)}px sans-serif`;
+  ctx.fillText(`Score: ${pmScore}`, offX, offY - tile * 0.25);
+
+  if (caught) {
+    ctx.fillStyle = 'rgba(255,80,80,0.9)';
+    ctx.font = `${Math.round(tile * 0.8)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('Caught!', W / 2, H / 2);
+    ctx.textAlign = 'left';
+  }
+}
+
+// ============================================================================
+// Driving scene: GTA-style free-roam - the car steers and drives toward
+// wherever the hand currently is, slowing for sharp turns.
+// ============================================================================
+const CAR_MAX_SPEED = 240;
+const CAR_TURN_RATE = Math.PI * 1.5;
+const CAR_ARRIVE_RADIUS = 140;
+const BUILDING_COLORS = ['#5c4a6e', '#4a5c6e', '#6e5c4a', '#4a6e5a', '#6e4a52'];
+const GROUND_COLOR = '#2b2b2e';
+
+let drivingInitialized = false;
+let buildings = [];
+let car = null;
+
+function initDriving() {
+  drivingInitialized = true;
+  car = { x: W / 2, y: H / 2, heading: 0, speed: 0 };
+  buildings = [];
+  const count = 9;
+  for (let i = 0; i < count; i++) {
+    const w = 70 + Math.random() * 140;
+    const h = 70 + Math.random() * 140;
+    buildings.push({
+      x: 40 + Math.random() * Math.max(1, W - 80 - w),
+      y: 40 + Math.random() * Math.max(1, H - 80 - h),
+      w, h,
+      color: BUILDING_COLORS[Math.floor(Math.random() * BUILDING_COLORS.length)],
+    });
+  }
+}
+
+function carCollides(x, y) {
+  for (const b of buildings) {
+    if (x > b.x - 16 && x < b.x + b.w + 16 && y > b.y - 16 && y < b.y + b.h + 16) return true;
+  }
+  return false;
+}
+
+function updateCar(now, dt) {
+  if (hand) {
+    const dx = hand.x - car.x, dy = hand.y - car.y;
+    const d = Math.hypot(dx, dy);
+    const desiredHeading = Math.atan2(dy, dx);
+    let diff = Math.atan2(Math.sin(desiredHeading - car.heading), Math.cos(desiredHeading - car.heading));
+    const maxStep = CAR_TURN_RATE * dt;
+    diff = Math.max(-maxStep, Math.min(maxStep, diff));
+    car.heading += diff;
+    const alignment = Math.max(0.15, Math.cos(diff));
+    const targetSpeed = CAR_MAX_SPEED * Math.min(1, d / CAR_ARRIVE_RADIUS) * alignment;
+    car.speed += (targetSpeed - car.speed) * Math.min(1, dt * 3);
+  } else {
+    car.speed *= 0.92;
+  }
+
+  const nx = car.x + Math.cos(car.heading) * car.speed * dt;
+  const ny = car.y + Math.sin(car.heading) * car.speed * dt;
+  if (!carCollides(nx, ny)) {
+    car.x = clamp(nx, 20, W - 20);
+    car.y = clamp(ny, 20, H - 20);
+  } else {
+    car.speed *= 0.25;
+  }
+}
+
+function drawDrivingScene(now, dt) {
+  if (!drivingInitialized) initDriving();
+
+  updateCar(now, dt);
+
+  ctx.fillStyle = GROUND_COLOR;
+  ctx.fillRect(0, 0, W, H);
+
+  for (const b of buildings) {
+    ctx.fillStyle = b.color;
+    ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(b.x, b.y, b.w, b.h);
+  }
+
+  ctx.save();
+  ctx.translate(car.x, car.y);
+  ctx.rotate(car.heading);
+  ctx.fillStyle = '#e63946';
+  ctx.fillRect(-16, -9, 32, 18);
+  ctx.fillStyle = '#a8dadc';
+  ctx.fillRect(2, -7, 10, 14);
+  ctx.fillStyle = '#1d1d1d';
+  ctx.fillRect(-14, -10, 6, 3);
+  ctx.fillRect(-14, 7, 6, 3);
+  ctx.restore();
+}
+
 let lastTime = performance.now();
 function frame(t) {
   const dt = Math.min(0.05, (t - lastTime) / 1000);
@@ -833,6 +1175,10 @@ function frame(t) {
 
   if (currentScene === 'flowers') {
     drawFlowerScene(now, dt);
+  } else if (currentScene === 'pacman') {
+    drawPacmanScene(now, dt);
+  } else if (currentScene === 'driving') {
+    drawDrivingScene(now, dt);
   } else {
     ctx.fillStyle = WATER_COLOR;
     ctx.fillRect(0, 0, W, H);
@@ -846,7 +1192,9 @@ function frame(t) {
     introActive = drawIntro(now);
   }
 
-  drawHandMarker(now);
+  if (currentScene === 'fish' || currentScene === 'flowers') {
+    drawHandMarker(now);
+  }
 
   requestAnimationFrame(frame);
 }

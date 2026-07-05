@@ -23,7 +23,7 @@ MAX_FISH = 20
 PLAYABLE_HEIGHT_FRAC = 1.0
 
 # New scenes just need adding here + a matching branch in static/tank.js.
-AVAILABLE_SCENES = ["fish", "flowers"]
+AVAILABLE_SCENES = ["fish", "flowers", "pacman", "driving"]
 DEFAULT_SCENE = "fish"
 
 DEFAULT_COLORS = [
