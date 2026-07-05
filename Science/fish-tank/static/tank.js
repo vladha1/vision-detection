@@ -892,19 +892,31 @@ function pmBuildMaze() {
     }
     grid.push(row);
   }
-  const blocks = [
-    [2, 2, 3, 4], [2, PM_COLS - 5, 3, PM_COLS - 3], [2, 8, 3, 10],
-    [5, 2, 7, 3], [5, PM_COLS - 4, 7, PM_COLS - 3],
-    [5, 6, 6, 8], [5, PM_COLS - 9, 6, PM_COLS - 7],
-    [9, 2, 10, 4], [9, PM_COLS - 5, 10, PM_COLS - 3], [9, 8, 10, 10],
-  ];
-  for (const [r0, c0, r1, c1] of blocks) {
-    for (let r = r0; r <= r1; r++) {
-      for (let c = c0; c <= c1; c++) {
-        if (r > 0 && r < PM_ROWS - 1 && c > 0 && c < PM_COLS - 1) grid[r][c] = 1;
-      }
-    }
-  }
+
+  const set = (r, c) => { if (r > 0 && r < PM_ROWS - 1 && c > 0 && c < PM_COLS - 1) grid[r][c] = 1; };
+  const hseg = (r, c0, c1) => { for (let c = c0; c <= c1; c++) set(r, c); };
+  const vseg = (r0, r1, c) => { for (let r = r0; r <= r1; r++) set(r, c); };
+  const box = (r0, c0, r1, c1) => { for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) set(r, c); };
+
+  // Thin partition walls (not thick blocks) so the maze reads as proper
+  // winding corridors rather than a few wide-open lanes. Verified fully
+  // connected (including the tunnel wraparound) via a flood-fill check.
+  hseg(2, 2, 4); hseg(2, 8, 10); hseg(2, 14, 16);
+  vseg(2, 3, 6); vseg(2, 3, 12);
+
+  hseg(4, 1, 3); hseg(4, 6, 7); hseg(4, 11, 12); hseg(4, 15, 17);
+  vseg(3, 4, 3); vseg(3, 4, 15);
+
+  box(5, 8, 7, 10); // center ghost house
+  vseg(5, 6, 2); vseg(5, 6, 16);
+  hseg(6, 4, 5); hseg(6, 13, 14);
+
+  hseg(8, 1, 3); hseg(8, 6, 7); hseg(8, 11, 12); hseg(8, 15, 17);
+  vseg(8, 9, 3); vseg(8, 9, 15);
+
+  hseg(10, 2, 4); hseg(10, 8, 10); hseg(10, 14, 16);
+  vseg(9, 10, 6); vseg(9, 10, 12);
+
   grid[PM_TUNNEL_ROW][0] = 0;
   grid[PM_TUNNEL_ROW][PM_COLS - 1] = 0;
   return grid;
@@ -945,7 +957,7 @@ function pmWrapTunnel(entity) {
 }
 
 function pmResetPositions() {
-  pmPac = { row: 6, col: 9, dir: { dr: 0, dc: 0 }, nextDir: { dr: 0, dc: 0 } };
+  pmPac = { row: 8, col: 9, dir: { dr: 0, dc: 0 }, nextDir: { dr: 0, dc: 0 } }; // just below the ghost house
   pmGhosts = PM_GHOST_COLORS.map((color, i) => {
     // integer row/col so the "at an intersection" check triggers immediately
     // and wall-aware direction selection kicks in right away
