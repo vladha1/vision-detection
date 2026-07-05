@@ -379,7 +379,11 @@ const REACTION_DODGE_DISTANCE = 70;     // a small step aside, not a shove
 const REACTION_DODGE_DURATION = 1.4;
 const REACTION_COLOR_DURATION = 1.4;
 const REACTION_FACE_SECONDS = 2.5;
+const GRASS_ZONE_HEIGHT = 110;      // how far up from the bottom counts as "touching the grass"
+const GRASS_TOUCH_CHECK_SECONDS = 0.6;
+const GRASS_TOUCH_SPAWN_CHANCE = 0.4; // good frequency, but not guaranteed every check
 let gardenFlowers = [];
+let lastGrassTouchCheck = 0;
 let lastGardenSpawnCheck = 0;
 let lastReactionCheck = 0;
 
@@ -403,6 +407,18 @@ function makeGardenFlower(now, x, y) {
 
 function spawnGardenFlower(now, x, y) {
   gardenFlowers.push(makeGardenFlower(now, x !== undefined ? x : Math.random() * W, y !== undefined ? y : Math.random() * H));
+}
+
+const SPROUT_RISE_MIN = 90;  // px risen from the grass line
+const SPROUT_RISE_MAX = 260;
+
+function spawnSproutingFlower(now, x) {
+  if (gardenFlowers.length >= GARDEN_MAX_COUNT) return;
+  const groundY = H - 6; // matches the grass baseline
+  const restY = clamp(groundY - (SPROUT_RISE_MIN + Math.random() * (SPROUT_RISE_MAX - SPROUT_RISE_MIN)), EDGE_MARGIN, H - EDGE_MARGIN);
+  const flower = makeGardenFlower(now, clamp(x, EDGE_MARGIN, W - EDGE_MARGIN), restY);
+  flower.groundY = groundY;
+  gardenFlowers.push(flower);
 }
 
 function startMove(f, targetX, targetY, now, duration = REACTION_MOVE_DURATION) {
@@ -660,6 +676,13 @@ function drawFlowerScene(now, dt) {
     if (Math.random() < 0.6) spawnGardenFlower(now);
   }
 
+  if (hand && hand.y > H - GRASS_ZONE_HEIGHT && now - lastGrassTouchCheck > GRASS_TOUCH_CHECK_SECONDS) {
+    lastGrassTouchCheck = now;
+    if (Math.random() < GRASS_TOUCH_SPAWN_CHANCE) {
+      spawnSproutingFlower(now, hand.x + (Math.random() - 0.5) * 40);
+    }
+  }
+
   if (hand && now - lastReactionCheck > REACTION_CHECK_SECONDS) {
     lastReactionCheck = now;
     triggerHandReaction(now);
@@ -715,10 +738,15 @@ function drawFlowerScene(now, dt) {
       }
     }
 
+    let riseY = 0;
+    if (f.groundY !== undefined && age < GARDEN_BLOOM_SECONDS) {
+      riseY = (f.groundY - f.y) * (1 - smoothstep(age / GARDEN_BLOOM_SECONDS));
+    }
+
     const face = (f.faceState && now < f.faceUntil) ? f.faceState : null;
     const origX = f.x, origY = f.y;
     f.x += leanX;
-    f.y += leanY;
+    f.y += leanY + riseY;
     drawFlower(f, growth, alpha, wobble, face);
     f.x = origX;
     f.y = origY;
