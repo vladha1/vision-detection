@@ -823,29 +823,19 @@ function drawHandMarker(now) {
     ctx.drawImage(img, -iw / 2, -ih / 2, iw, ih);
     ctx.restore();
   } else {
-    // pacman / driving: a bold, high-contrast crosshair (black outline behind
-    // a bright color) so it stays visible against any part of the scene.
-    const r = 22 * pulse;
+    // pacman / driving: a solid, bright filled dot with a black outline ring
+    // so it stays clearly visible against any part of the scene.
+    const r = 16 * pulse;
     const crossColor = '#39ff9d';
-    const arms = [[-1, 0], [1, 0], [0, -1], [0, 1]];
     ctx.save();
-    ctx.globalAlpha = 0.95;
-    for (const [strokeColor, width] of [['#000', 7], [crossColor, 3]]) {
-      ctx.strokeStyle = strokeColor;
-      ctx.lineWidth = width;
-      ctx.beginPath();
-      ctx.arc(hand.x, hand.y, r, 0, Math.PI * 2);
-      ctx.stroke();
-      for (const [dx, dy] of arms) {
-        ctx.beginPath();
-        ctx.moveTo(hand.x + dx * (r + 4), hand.y + dy * (r + 4));
-        ctx.lineTo(hand.x + dx * (r + 26), hand.y + dy * (r + 26));
-        ctx.stroke();
-      }
-    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.arc(hand.x, hand.y, r + 4, 0, Math.PI * 2);
+    ctx.fill();
     ctx.fillStyle = crossColor;
     ctx.beginPath();
-    ctx.arc(hand.x, hand.y, 4, 0, Math.PI * 2);
+    ctx.arc(hand.x, hand.y, r, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
@@ -949,14 +939,13 @@ function pmWrapTunnel(entity) {
 }
 
 function pmResetPositions() {
-  pmPac = { row: 12, col: 9, dir: { dr: 0, dc: 0 }, nextDir: { dr: 0, dc: 0 } }; // the "door" cell just below the ghost house
+  pmPac = { row: 12, col: 9, dir: { dr: 0, dc: 0 } }; // the "door" cell just below the ghost house
   pmGhosts = PM_GHOST_COLORS.map((color, i) => {
     const homeRow = 8, homeCol = 8 + i; // spread across the open row just above the ghost house
     return { row: homeRow, col: homeCol, dir: { dr: 0, dc: -1 }, color, homeRow, homeCol };
   });
   pmStarted = false; // ghosts stay still until Pac-Man's first real move
   pmPowerUntil = 0;
-  pmHandLastPos = null;
 }
 
 function pmInit() {
@@ -966,29 +955,6 @@ function pmInit() {
   pmResetPositions();
   pmScore = 0;
   pmCaughtUntil = 0;
-}
-
-// Swipe-based steering: direction follows the hand's last real movement,
-// ignoring small/jittery motion. The anchor point only moves once a swipe
-// big enough to register happens, so slow deliberate movement still
-// eventually crosses the threshold instead of endlessly resetting against
-// a constantly-drifting reference.
-let pmHandLastPos = null;
-
-function pmReadHandInput(tile, offX, offY) {
-  if (!hand) return;
-  if (!pmHandLastPos) {
-    pmHandLastPos = { x: hand.x, y: hand.y };
-    return;
-  }
-  const dx = hand.x - pmHandLastPos.x;
-  const dy = hand.y - pmHandLastPos.y;
-  if (Math.hypot(dx, dy) > tile * 0.5) {
-    pmPac.nextDir = Math.abs(dx) > Math.abs(dy)
-      ? { dr: 0, dc: dx > 0 ? 1 : -1 }
-      : { dr: dy > 0 ? 1 : -1, dc: 0 };
-    pmHandLastPos = { x: hand.x, y: hand.y };
-  }
 }
 
 function pmMoveGhost(g, dt, frightened) {
@@ -1031,15 +997,30 @@ function drawPacmanScene(now, dt) {
   const caught = now < pmCaughtUntil;
 
   if (!caught) {
-    pmReadHandInput(tile, offX, offY);
+    // Follow the cursor when the path it points to is actually open at this
+    // intersection; otherwise just keep going the way Pac-Man is already
+    // heading (e.g. cursor behind Pac-Man => turn around, if reversing is
+    // open; cursor off to a side that's walled off => keep straight).
+    let desiredDir = null;
+    if (hand) {
+      const handRow = (hand.y - offY) / tile;
+      const handCol = (hand.x - offX) / tile;
+      const dr = handRow - pmPac.row;
+      const dc = handCol - pmPac.col;
+      if (Math.hypot(dr, dc) > 0.3) {
+        desiredDir = Math.abs(dc) > Math.abs(dr)
+          ? { dr: 0, dc: dc > 0 ? 1 : -1 }
+          : { dr: dr > 0 ? 1 : -1, dc: 0 };
+      }
+    }
 
     const atRow = Math.abs(pmPac.row - Math.round(pmPac.row)) < 0.15;
     const atCol = Math.abs(pmPac.col - Math.round(pmPac.col)) < 0.15;
-    const directionChanging = pmPac.nextDir.dr !== pmPac.dir.dr || pmPac.nextDir.dc !== pmPac.dir.dc;
-    if (directionChanging && (pmPac.nextDir.dr || pmPac.nextDir.dc) && atRow && atCol) {
+    if (desiredDir && atRow && atCol) {
       const r = Math.round(pmPac.row), c = Math.round(pmPac.col);
-      if (!pmIsWall(r + pmPac.nextDir.dr, c + pmPac.nextDir.dc)) {
-        pmPac.dir = pmPac.nextDir;
+      const changing = desiredDir.dr !== pmPac.dir.dr || desiredDir.dc !== pmPac.dir.dc;
+      if (changing && !pmIsWall(r + desiredDir.dr, c + desiredDir.dc)) {
+        pmPac.dir = desiredDir;
         pmPac.row = r; pmPac.col = c;
         pmStarted = true;
       }
@@ -1059,7 +1040,7 @@ function drawPacmanScene(now, dt) {
         const r = pmPac.row, c = pmPac.col;
         const options = [{ dr: -1, dc: 0 }, { dr: 1, dc: 0 }, { dr: 0, dc: -1 }, { dr: 0, dc: 1 }]
           .filter(d => !pmIsWall(r + d.dr, c + d.dc));
-        const preferred = options.find(o => o.dr === pmPac.nextDir.dr && o.dc === pmPac.nextDir.dc);
+        const preferred = desiredDir && options.find(o => o.dr === desiredDir.dr && o.dc === desiredDir.dc);
         if (preferred) pmPac.dir = preferred;
         else if (options.length) pmPac.dir = options[Math.floor(Math.random() * options.length)];
       }
