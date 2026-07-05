@@ -260,7 +260,26 @@ function lerpColor(hexA, hexB, t) {
   return `rgb(${Math.round(a.r + (b.r - a.r) * t)},${Math.round(a.g + (b.g - a.g) * t)},${Math.round(a.b + (b.b - a.b) * t)})`;
 }
 
-function drawFlower(f, growth, alpha = 1, wobble = 0) {
+function drawFlowerFace(r, face) {
+  const eyeX = r * 0.11;
+  const eyeY = -r * 0.03;
+  if (face === 'scared') {
+    ctx.fillStyle = '#2a2a2a';
+    ctx.beginPath(); ctx.arc(-eyeX, eyeY, r * 0.065, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(eyeX, eyeY, r * 0.065, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#2a2a2a';
+    ctx.lineWidth = Math.max(1, r * 0.025);
+    ctx.beginPath(); ctx.arc(0, r * 0.16, r * 0.05, 0, Math.PI * 2); ctx.stroke();
+  } else if (face === 'happy') {
+    ctx.strokeStyle = '#2a2a2a';
+    ctx.lineWidth = Math.max(1, r * 0.035);
+    ctx.beginPath(); ctx.arc(-eyeX, eyeY + r * 0.05, r * 0.05, Math.PI, 0); ctx.stroke();
+    ctx.beginPath(); ctx.arc(eyeX, eyeY + r * 0.05, r * 0.05, Math.PI, 0); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, r * 0.02, r * 0.16, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
+  }
+}
+
+function drawFlower(f, growth, alpha = 1, wobble = 0, face = null) {
   const r = f.maxRadius * growth;
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -305,6 +324,9 @@ function drawFlower(f, growth, alpha = 1, wobble = 0) {
   ctx.beginPath();
   ctx.arc(0, 0, r * 0.28, 0, Math.PI * 2);
   ctx.fill();
+
+  if (face) drawFlowerFace(r, face);
+
   ctx.restore();
 }
 
@@ -338,28 +360,34 @@ function drawIntro(now) {
 
 // --- persistent "flowers" scene: a continuously blooming/fading garden,
 // selectable from the admin page instead of the fish tank.
-const GARDEN_TARGET_COUNT = 30;
-const GARDEN_MAX_COUNT = 60; // safety cap so a lingering hand can't spawn forever
-const GARDEN_BLOOM_SECONDS = 1.4;
+const GARDEN_TARGET_COUNT = 55;
+const GARDEN_MAX_COUNT = 90; // safety cap so a lingering hand can't spawn forever
+const GARDEN_BLOOM_SECONDS = 2.0;
 const GARDEN_SPAWN_CHECK_SECONDS = 0.15;
 const WOBBLE_RADIUS = 380;    // how far a hand's presence reaches into the garden
-const WOBBLE_FREQ = 9;        // radians/sec - how fast flowers shiver
-const WOBBLE_AMOUNT = 0.16;   // radians - how far they shiver, kept subtle
-const REACTION_CHECK_SECONDS = 0.5; // how often we "roll the dice" while a hand is present
+const WOBBLE_FREQ = 5;        // radians/sec - slow, gentle shimmer rather than a shake
+const WOBBLE_AMOUNT = 0.11;   // radians
+const WOBBLE_PULSE_AMOUNT = 0.12; // size-pulse on top of the rotation shimmer
+const REACTION_CHECK_SECONDS = 0.7; // how often we "roll the dice" while a hand is present
 const REACTION_NEARBY_RADIUS = WOBBLE_RADIUS;
 const REACTION_PATH_RADIUS = 140; // "in the way" distance for the dodge reaction
-const REACTION_MOVE_DURATION = 1.0;
-const REACTION_COLOR_DURATION = 0.8;
+const REACTION_MOVE_DURATION = 1.8;   // slow, soothing glide rather than a snap
+const REACTION_RELOCATE_DISTANCE = 220; // move nearby, not clear across the screen
+const REACTION_DODGE_DISTANCE = 70;     // a small step aside, not a shove
+const REACTION_DODGE_DURATION = 1.4;
+const REACTION_COLOR_DURATION = 1.4;
+const REACTION_FACE_SECONDS = 2.5;
 let gardenFlowers = [];
 let lastGardenSpawnCheck = 0;
 let lastReactionCheck = 0;
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function smoothstep(t) { return t * t * (3 - 2 * t); } // gentle ease-in/ease-out
 
 function makeGardenFlower(now, x, y) {
   return {
     x, y,
-    maxRadius: 16 + Math.random() * 70, // wide size range - tiny buds to big blooms
+    maxRadius: 14 + Math.random() * 62, // wide size range - tiny buds to big blooms
     petals: 5 + Math.floor(Math.random() * 3),
     color: FLOWER_COLORS[Math.floor(Math.random() * FLOWER_COLORS.length)],
     kind: randomKind(),
@@ -367,7 +395,7 @@ function makeGardenFlower(now, x, y) {
     wobbleSeed: Math.random() * Math.PI * 2,
     bornAt: now,
     hold: 2.5 + Math.random() * 3,
-    fade: 1.2 + Math.random() * 0.8,
+    fade: 1.6 + Math.random() * 1.0,
   };
 }
 
@@ -382,41 +410,85 @@ function startMove(f, targetX, targetY, now, duration = REACTION_MOVE_DURATION) 
   f.moveDuration = duration;
 }
 
-// While a hand lingers, occasionally: plant a new flower at the fingertip,
-// relocate a nearby one, nudge one out of the way, recolor one - or do
-// nothing at all, so the garden feels alive rather than mechanically
-// responsive.
-function triggerHandReaction(now) {
+function nearbyFlowers(radius) {
+  return gardenFlowers.filter(f => dist(f, hand) < radius);
+}
+
+function reactSpawn(now) {
   if (gardenFlowers.length >= GARDEN_MAX_COUNT) return;
-  const roll = Math.random();
-  if (roll < 0.25) {
-    const jitter = 40;
-    spawnGardenFlower(now, hand.x + (Math.random() - 0.5) * jitter * 2, hand.y + (Math.random() - 0.5) * jitter * 2);
-  } else if (roll < 0.45) {
-    const nearby = gardenFlowers.filter(f => f.moveStart === undefined && dist(f, hand) < REACTION_NEARBY_RADIUS);
-    if (nearby.length) {
-      const f = nearby[Math.floor(Math.random() * nearby.length)];
-      startMove(f, Math.random() * W, Math.random() * H, now);
+  const jitter = 30;
+  spawnGardenFlower(now, hand.x + (Math.random() - 0.5) * jitter * 2, hand.y + (Math.random() - 0.5) * jitter * 2);
+}
+
+function reactRelocate(now) {
+  const candidates = nearbyFlowers(REACTION_NEARBY_RADIUS).filter(f => f.moveStart === undefined);
+  if (!candidates.length) return;
+  const f = candidates[Math.floor(Math.random() * candidates.length)];
+  const targetX = f.x + (Math.random() - 0.5) * 2 * REACTION_RELOCATE_DISTANCE;
+  const targetY = f.y + (Math.random() - 0.5) * 2 * REACTION_RELOCATE_DISTANCE;
+  startMove(f, targetX, targetY, now, REACTION_MOVE_DURATION);
+}
+
+function reactDodge(now) {
+  const candidates = nearbyFlowers(REACTION_PATH_RADIUS).filter(f => f.moveStart === undefined);
+  if (!candidates.length) return;
+  const f = candidates[0];
+  const away = norm(sub(f, hand));
+  startMove(f, f.x + away.x * REACTION_DODGE_DISTANCE, f.y + away.y * REACTION_DODGE_DISTANCE, now, REACTION_DODGE_DURATION);
+}
+
+function reactRecolor(now) {
+  const candidates = nearbyFlowers(REACTION_NEARBY_RADIUS).filter(f => f.colorChangeStart === undefined);
+  if (!candidates.length) return;
+  const f = candidates[Math.floor(Math.random() * candidates.length)];
+  let nextColor = f.color;
+  while (nextColor === f.color) nextColor = FLOWER_COLORS[Math.floor(Math.random() * FLOWER_COLORS.length)];
+  f.colorFrom = f.color;
+  f.colorTo = nextColor;
+  f.colorChangeStart = now;
+}
+
+function reactBecomeButterfly(now) {
+  const candidates = nearbyFlowers(REACTION_NEARBY_RADIUS);
+  if (!candidates.length) return;
+  const f = candidates[Math.floor(Math.random() * candidates.length)];
+  gardenFlowers = gardenFlowers.filter(x => x !== f);
+  spawnButterfly(f.x, f.y, f.color);
+}
+
+function reactFace(now, face) {
+  const candidates = nearbyFlowers(REACTION_NEARBY_RADIUS);
+  if (!candidates.length) return;
+  const f = candidates[Math.floor(Math.random() * candidates.length)];
+  f.faceState = face;
+  f.faceUntil = now + REACTION_FACE_SECONDS;
+}
+
+// While a hand lingers, occasionally: plant a new flower at the fingertip,
+// relocate a nearby one a little, nudge one gently out of the way, recolor
+// one, turn one into a butterfly, give one an expression - or do nothing at
+// all, so the garden feels alive rather than mechanically responsive.
+const REACTIONS = [
+  { weight: 2.5, action: reactSpawn },
+  { weight: 2.5, action: reactRelocate },
+  { weight: 2, action: reactDodge },
+  { weight: 2, action: reactRecolor },
+  { weight: 1, action: reactBecomeButterfly },
+  { weight: 1.2, action: (now) => reactFace(now, 'scared') },
+  { weight: 1.2, action: (now) => reactFace(now, 'happy') },
+  { weight: 4, action: null }, // no reaction - keeps it calm rather than constantly busy
+];
+
+function triggerHandReaction(now) {
+  const total = REACTIONS.reduce((sum, r) => sum + r.weight, 0);
+  let roll = Math.random() * total;
+  for (const r of REACTIONS) {
+    if (roll < r.weight) {
+      if (r.action) r.action(now);
+      return;
     }
-  } else if (roll < 0.65) {
-    const inPath = gardenFlowers.filter(f => f.moveStart === undefined && dist(f, hand) < REACTION_PATH_RADIUS);
-    if (inPath.length) {
-      const f = inPath[0];
-      const away = norm(sub(f, hand));
-      startMove(f, f.x + away.x * 180, f.y + away.y * 180, now, 0.6);
-    }
-  } else if (roll < 0.9) {
-    const nearby = gardenFlowers.filter(f => f.colorChangeStart === undefined && dist(f, hand) < REACTION_NEARBY_RADIUS);
-    if (nearby.length) {
-      const f = nearby[Math.floor(Math.random() * nearby.length)];
-      let nextColor = f.color;
-      while (nextColor === f.color) nextColor = FLOWER_COLORS[Math.floor(Math.random() * FLOWER_COLORS.length)];
-      f.colorFrom = f.color;
-      f.colorTo = nextColor;
-      f.colorChangeStart = now;
-    }
+    roll -= r.weight;
   }
-  // else: no reaction this round
 }
 
 // --- ground filler: grass tufts (static positions, gentle sway) so the
@@ -469,18 +541,21 @@ const BUTTERFLY_COLORS = ['#fff176', '#ff8a65', '#ba68c8', '#4fc3f7', '#f06292']
 const BUTTERFLY_COUNT = 6;
 let butterflies = [];
 
+function spawnButterfly(x, y, color) {
+  butterflies.push({
+    x, y,
+    angle: Math.random() * Math.PI * 2,
+    speed: 26 + Math.random() * 22,
+    color: color || BUTTERFLY_COLORS[Math.floor(Math.random() * BUTTERFLY_COLORS.length)],
+    wanderSeed: Math.random() * Math.PI * 2,
+    flapSeed: Math.random() * Math.PI * 2,
+  });
+}
+
 function initButterflies() {
   butterflies = [];
   for (let i = 0; i < BUTTERFLY_COUNT; i++) {
-    butterflies.push({
-      x: Math.random() * W,
-      y: Math.random() * H * 0.7,
-      angle: Math.random() * Math.PI * 2,
-      speed: 26 + Math.random() * 22,
-      color: BUTTERFLY_COLORS[Math.floor(Math.random() * BUTTERFLY_COLORS.length)],
-      wanderSeed: Math.random() * Math.PI * 2,
-      flapSeed: Math.random() * Math.PI * 2,
-    });
+    spawnButterfly(Math.random() * W, Math.random() * H * 0.7);
   }
 }
 
@@ -546,7 +621,7 @@ function drawFlowerScene(now, dt) {
 
     if (f.moveStart !== undefined) {
       const mt = Math.min(1, (now - f.moveStart) / f.moveDuration);
-      const eased = 1 - Math.pow(1 - mt, 3);
+      const eased = smoothstep(mt);
       f.x = f.moveFrom.x + (f.moveTo.x - f.moveFrom.x) * eased;
       f.y = f.moveFrom.y + (f.moveTo.y - f.moveFrom.y) * eased;
       if (mt >= 1) f.moveStart = undefined;
@@ -554,13 +629,13 @@ function drawFlowerScene(now, dt) {
 
     if (f.colorChangeStart !== undefined) {
       const ct = Math.min(1, (now - f.colorChangeStart) / REACTION_COLOR_DURATION);
-      f.color = lerpColor(f.colorFrom, f.colorTo, ct);
+      f.color = lerpColor(f.colorFrom, f.colorTo, smoothstep(ct));
       if (ct >= 1) f.colorChangeStart = undefined;
     }
 
     let growth, alpha;
     if (age < GARDEN_BLOOM_SECONDS) {
-      growth = 1 - Math.pow(1 - age / GARDEN_BLOOM_SECONDS, 3);
+      growth = smoothstep(age / GARDEN_BLOOM_SECONDS);
       alpha = growth;
     } else if (age < GARDEN_BLOOM_SECONDS + f.hold) {
       growth = 1;
@@ -576,11 +651,12 @@ function drawFlowerScene(now, dt) {
       if (d < WOBBLE_RADIUS) {
         const intensity = 1 - d / WOBBLE_RADIUS;
         wobble = Math.sin(now * WOBBLE_FREQ + f.wobbleSeed) * WOBBLE_AMOUNT * intensity;
-        // pulse size too - a rotation shiver alone is easy to miss among many flowers
-        growth *= 1 + Math.sin(now * WOBBLE_FREQ + f.wobbleSeed) * 0.22 * intensity;
+        growth *= 1 + Math.sin(now * WOBBLE_FREQ + f.wobbleSeed) * WOBBLE_PULSE_AMOUNT * intensity;
       }
     }
-    drawFlower(f, growth, alpha, wobble);
+
+    const face = (f.faceState && now < f.faceUntil) ? f.faceState : null;
+    drawFlower(f, growth, alpha, wobble, face);
     return true;
   });
 
