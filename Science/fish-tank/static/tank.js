@@ -360,8 +360,8 @@ function drawIntro(now) {
 
 // --- persistent "flowers" scene: a continuously blooming/fading garden,
 // selectable from the admin page instead of the fish tank.
-const GARDEN_TARGET_COUNT = 55;
-const GARDEN_MAX_COUNT = 90; // safety cap so a lingering hand can't spawn forever
+const GARDEN_TARGET_COUNT = 110;
+const GARDEN_MAX_COUNT = 180; // safety cap so a lingering hand can't spawn forever
 const GARDEN_BLOOM_SECONDS = 2.0;
 const GARDEN_SPAWN_CHECK_SECONDS = 0.15;
 const WOBBLE_RADIUS = 380;    // how far a hand's presence reaches into the garden
