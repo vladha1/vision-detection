@@ -368,6 +368,8 @@ const WOBBLE_RADIUS = 380;    // how far a hand's presence reaches into the gard
 const WOBBLE_FREQ = 5;        // radians/sec - slow, gentle shimmer rather than a shake
 const WOBBLE_AMOUNT = 0.11;   // radians
 const WOBBLE_PULSE_AMOUNT = 0.12; // size-pulse on top of the rotation shimmer
+const TOUCH_LEAN_RADIUS = 160;  // tighter than WOBBLE_RADIUS - a clear "it noticed you" cue
+const TOUCH_LEAN_AMOUNT = 20;   // px, guaranteed lean-away displacement at zero distance
 const REACTION_CHECK_SECONDS = 0.7; // how often we "roll the dice" while a hand is present
 const REACTION_NEARBY_RADIUS = WOBBLE_RADIUS;
 const REACTION_PATH_RADIUS = 140; // "in the way" distance for the dodge reaction
@@ -646,6 +648,7 @@ function drawFlowerScene(now, dt) {
     }
 
     let wobble = 0;
+    let leanX = 0, leanY = 0;
     if (hand) {
       const d = dist(f, hand);
       if (d < WOBBLE_RADIUS) {
@@ -653,10 +656,23 @@ function drawFlowerScene(now, dt) {
         wobble = Math.sin(now * WOBBLE_FREQ + f.wobbleSeed) * WOBBLE_AMOUNT * intensity;
         growth *= 1 + Math.sin(now * WOBBLE_FREQ + f.wobbleSeed) * WOBBLE_PULSE_AMOUNT * intensity;
       }
+      // guaranteed, deterministic lean-away from a close hand - independent of
+      // the random reaction roll, so it's always clear the flower noticed you
+      if (d < TOUCH_LEAN_RADIUS) {
+        const leanIntensity = smoothstep(1 - d / TOUCH_LEAN_RADIUS);
+        const away = norm(sub(f, hand));
+        leanX = away.x * TOUCH_LEAN_AMOUNT * leanIntensity;
+        leanY = away.y * TOUCH_LEAN_AMOUNT * leanIntensity;
+      }
     }
 
     const face = (f.faceState && now < f.faceUntil) ? f.faceState : null;
+    const origX = f.x, origY = f.y;
+    f.x += leanX;
+    f.y += leanY;
     drawFlower(f, growth, alpha, wobble, face);
+    f.x = origX;
+    f.y = origY;
     return true;
   });
 
