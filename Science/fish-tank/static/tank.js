@@ -246,12 +246,12 @@ function makeIntroFlowers(count) {
   return flowers;
 }
 
-function drawFlower(f, growth, alpha = 1) {
+function drawFlower(f, growth, alpha = 1, wobble = 0) {
   const r = f.maxRadius * growth;
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(f.x, f.y);
-  ctx.rotate(f.rotation);
+  ctx.rotate(f.rotation + wobble);
   for (let p = 0; p < f.petals; p++) {
     ctx.save();
     ctx.rotate((p / f.petals) * Math.PI * 2);
@@ -301,6 +301,9 @@ function drawIntro(now) {
 const GARDEN_TARGET_COUNT = 16;
 const GARDEN_BLOOM_SECONDS = 1.4;
 const GARDEN_SPAWN_CHECK_SECONDS = 0.2;
+const WOBBLE_RADIUS = 380;    // how far a hand's presence reaches into the garden
+const WOBBLE_FREQ = 9;        // radians/sec - how fast flowers shiver
+const WOBBLE_AMOUNT = 0.16;   // radians - how far they shiver, kept subtle
 let gardenFlowers = [];
 let lastGardenSpawnCheck = 0;
 
@@ -312,6 +315,7 @@ function spawnGardenFlower(now) {
     petals: 5 + Math.floor(Math.random() * 3),
     color: FLOWER_COLORS[Math.floor(Math.random() * FLOWER_COLORS.length)],
     rotation: Math.random() * Math.PI * 2,
+    wobbleSeed: Math.random() * Math.PI * 2,
     bornAt: now,
     hold: 2.5 + Math.random() * 3,
     fade: 1.2 + Math.random() * 0.8,
@@ -343,7 +347,16 @@ function drawFlowerScene(now) {
       growth = 1;
       alpha = Math.max(0, 1 - (age - GARDEN_BLOOM_SECONDS - f.hold) / f.fade);
     }
-    drawFlower(f, growth, alpha);
+
+    let wobble = 0;
+    if (hand) {
+      const d = dist(f, hand);
+      if (d < WOBBLE_RADIUS) {
+        const intensity = 1 - d / WOBBLE_RADIUS;
+        wobble = Math.sin(now * WOBBLE_FREQ + f.wobbleSeed) * WOBBLE_AMOUNT * intensity;
+      }
+    }
+    drawFlower(f, growth, alpha, wobble);
     return true;
   });
 }
