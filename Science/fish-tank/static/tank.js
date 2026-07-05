@@ -874,6 +874,7 @@ let pmDots = null;
 let pmPac = null;
 let pmGhosts = null;
 let pmCaughtUntil = 0;
+let pmStarted = false;
 let pmScore = 0;
 let pmInitialized = false;
 
@@ -922,6 +923,7 @@ function pmResetPositions() {
   pmGhosts = PM_GHOST_COLORS.map((color, i) => ({
     row: 1.5 + i * 0.6, col: PM_COLS - 2, dir: { dr: 0, dc: -1 }, color,
   }));
+  pmStarted = false; // ghosts stay still until Pac-Man's first real move
 }
 
 function pmInit() {
@@ -991,11 +993,13 @@ function drawPacmanScene(now, dt) {
 
     const atRow = Math.abs(pmPac.row - Math.round(pmPac.row)) < 0.15;
     const atCol = Math.abs(pmPac.col - Math.round(pmPac.col)) < 0.15;
-    if ((pmPac.nextDir.dr || pmPac.nextDir.dc) && atRow && atCol) {
+    const directionChanging = pmPac.nextDir.dr !== pmPac.dir.dr || pmPac.nextDir.dc !== pmPac.dir.dc;
+    if (directionChanging && (pmPac.nextDir.dr || pmPac.nextDir.dc) && atRow && atCol) {
       const r = Math.round(pmPac.row), c = Math.round(pmPac.col);
       if (!pmIsWall(r + pmPac.nextDir.dr, c + pmPac.nextDir.dc)) {
         pmPac.dir = pmPac.nextDir;
         pmPac.row = r; pmPac.col = c;
+        pmStarted = true;
       }
     }
     if (pmPac.dir.dr || pmPac.dir.dc) {
@@ -1015,12 +1019,14 @@ function drawPacmanScene(now, dt) {
     if (pmDots.has(key)) { pmDots.delete(key); pmScore++; }
     if (pmDots.size === 0) { pmFillDots(); }
 
-    for (const g of pmGhosts) pmMoveGhost(g, dt);
-    for (const g of pmGhosts) {
-      if (Math.hypot(g.row - pmPac.row, g.col - pmPac.col) < 0.6) {
-        pmCaughtUntil = now + 1.4;
-        pmResetPositions();
-        break;
+    if (pmStarted) {
+      for (const g of pmGhosts) pmMoveGhost(g, dt);
+      for (const g of pmGhosts) {
+        if (Math.hypot(g.row - pmPac.row, g.col - pmPac.col) < 0.6) {
+          pmCaughtUntil = now + 1.4;
+          pmResetPositions();
+          break;
+        }
       }
     }
   }
