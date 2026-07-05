@@ -807,9 +807,15 @@ function drawHandMarker(now) {
   handMarkerLastPos = { x: hand.x, y: hand.y };
 
   const pulse = 1 + Math.sin(now * 3) * 0.12;
-  drawGlow(hand.x, hand.y, 70 * pulse, 'rgba(255,255,180,0.4)');
+  // On the Pac-Man scene the cursor is confined to the board/open trails
+  // (computed in drawPacmanScene); everywhere else it's the raw hand position.
+  const useConfined = currentScene === 'pacman' && pmCursorPxX !== null;
+  const mx = useConfined ? pmCursorPxX : hand.x;
+  const my = useConfined ? pmCursorPxY : hand.y;
+
+  drawGlow(mx, my, 70 * pulse, 'rgba(255,255,180,0.4)');
   if (currentScene === 'flowers') {
-    const marker = { x: hand.x, y: hand.y, maxRadius: 24 * pulse, petals: 6, color: HAND_MARKER_COLOR, kind: 'daisy', rotation: now * 0.6 };
+    const marker = { x: mx, y: my, maxRadius: 24 * pulse, petals: 6, color: HAND_MARKER_COLOR, kind: 'daisy', rotation: now * 0.6 };
     drawFlower(marker, 1, 0.85, 0);
   } else if (currentScene === 'fish') {
     const img = getHandMarkerFish();
@@ -818,7 +824,7 @@ function drawHandMarker(now) {
     const ih = (img.height || FISH_LENGTH * 0.6) * s;
     ctx.save();
     ctx.globalAlpha = 0.85;
-    ctx.translate(hand.x, hand.y);
+    ctx.translate(mx, my);
     ctx.rotate(handMarkerHeading);
     ctx.drawImage(img, -iw / 2, -ih / 2, iw, ih);
     ctx.restore();
@@ -831,18 +837,18 @@ function drawHandMarker(now) {
     ctx.globalAlpha = 1;
     ctx.fillStyle = '#000';
     ctx.beginPath();
-    ctx.arc(hand.x, hand.y, r + 4, 0, Math.PI * 2);
+    ctx.arc(mx, my, r + 4, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = crossColor;
     ctx.beginPath();
-    ctx.arc(hand.x, hand.y, r, 0, Math.PI * 2);
+    ctx.arc(mx, my, r, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
     if (currentScene === 'pacman' && pmPac && (pmPac.dir.dr || pmPac.dir.dc)) {
       const arrowAngle = Math.atan2(pmPac.dir.dr, pmPac.dir.dc);
       ctx.save();
-      ctx.translate(hand.x, hand.y);
+      ctx.translate(mx, my);
       ctx.rotate(arrowAngle);
       ctx.fillStyle = '#ffd23f';
       ctx.beginPath();
@@ -908,6 +914,8 @@ let pmCaughtUntil = 0;
 let pmStarted = false;
 let pmScore = 0;
 let pmInitialized = false;
+let pmCursorPxX = null;
+let pmCursorPxY = null;
 
 function pmBuildMaze() {
   return PM_RAW_MAP.map(row => row.map(v => (v === 0 || v === 3) ? 1 : 0));
@@ -930,6 +938,27 @@ function pmIsWall(row, col) {
   if (r === PM_TUNNEL_ROW && (c < 0 || c >= PM_COLS)) return false; // open tunnel mouth
   if (r < 0 || r >= PM_ROWS || c < 0 || c >= PM_COLS) return true;
   return pmGrid[r][c] === 1;
+}
+
+// Confines a raw (row, col) to the maze bounds and, if it lands on a wall,
+// to the nearest open cell - so the cursor always reads as "somewhere on
+// the board/trails" instead of floating over a wall block.
+function pmNearestOpenCell(row, col) {
+  const r0 = Math.max(0, Math.min(PM_ROWS - 1, Math.round(row)));
+  const c0 = Math.max(0, Math.min(PM_COLS - 1, Math.round(col)));
+  if (!pmIsWall(r0, c0)) return { row: r0, col: c0 };
+  const maxRadius = Math.max(PM_ROWS, PM_COLS);
+  for (let radius = 1; radius <= maxRadius; radius++) {
+    for (let dr = -radius; dr <= radius; dr++) {
+      for (let dc = -radius; dc <= radius; dc++) {
+        if (Math.max(Math.abs(dr), Math.abs(dc)) !== radius) continue;
+        const rr = r0 + dr, cc = c0 + dc;
+        if (rr < 0 || rr >= PM_ROWS || cc < 0 || cc >= PM_COLS) continue;
+        if (!pmIsWall(rr, cc)) return { row: rr, col: cc };
+      }
+    }
+  }
+  return { row: r0, col: c0 };
 }
 
 function pmWrapTunnel(entity) {
@@ -996,23 +1025,30 @@ function drawPacmanScene(now, dt) {
 
   const caught = now < pmCaughtUntil;
 
-  if (!caught) {
-    // Follow the cursor when the path it points to is actually open at this
-    // intersection; otherwise just keep going the way Pac-Man is already
-    // heading (e.g. cursor behind Pac-Man => turn around, if reversing is
-    // open; cursor off to a side that's walled off => keep straight).
-    let desiredDir = null;
-    if (hand) {
-      const handRow = (hand.y - offY) / tile;
-      const handCol = (hand.x - offX) / tile;
-      const dr = handRow - pmPac.row;
-      const dc = handCol - pmPac.col;
-      if (Math.hypot(dr, dc) > 0.3) {
-        desiredDir = Math.abs(dc) > Math.abs(dr)
-          ? { dr: 0, dc: dc > 0 ? 1 : -1 }
-          : { dr: dr > 0 ? 1 : -1, dc: 0 };
-      }
+  // Confine the cursor to the board and its open trails - never floats over
+  // a wall block or off the edge - so Pac-Man is always being pointed
+  // somewhere it could plausibly walk to.
+  let desiredDir = null;
+  if (hand) {
+    const rawRow = (hand.y - offY) / tile;
+    const rawCol = (hand.x - offX) / tile;
+    const cursor = pmNearestOpenCell(rawRow, rawCol);
+    pmCursorPxX = offX + (cursor.col + 0.5) * tile;
+    pmCursorPxY = offY + (cursor.row + 0.5) * tile;
+
+    const dr = cursor.row - pmPac.row;
+    const dc = cursor.col - pmPac.col;
+    if (Math.hypot(dr, dc) > 0.3) {
+      desiredDir = Math.abs(dc) > Math.abs(dr)
+        ? { dr: 0, dc: dc > 0 ? 1 : -1 }
+        : { dr: dr > 0 ? 1 : -1, dc: 0 };
     }
+  } else {
+    pmCursorPxX = null;
+    pmCursorPxY = null;
+  }
+
+  if (!caught) {
 
     const atRow = Math.abs(pmPac.row - Math.round(pmPac.row)) < 0.15;
     const atCol = Math.abs(pmPac.col - Math.round(pmPac.col)) < 0.15;
@@ -1038,11 +1074,16 @@ function drawPacmanScene(now, dt) {
         pmPac.row = Math.round(pmPac.row);
         pmPac.col = Math.round(pmPac.col);
         const r = pmPac.row, c = pmPac.col;
+        const reverseDir = { dr: -pmPac.dir.dr, dc: -pmPac.dir.dc };
         const options = [{ dr: -1, dc: 0 }, { dr: 1, dc: 0 }, { dr: 0, dc: -1 }, { dr: 0, dc: 1 }]
           .filter(d => !pmIsWall(r + d.dr, c + d.dc));
+        // prefer any real turn over reversing - only reverse if that's the
+        // only option left (a genuine dead end)
+        const nonReverse = options.filter(d => !(d.dr === reverseDir.dr && d.dc === reverseDir.dc));
         const preferred = desiredDir && options.find(o => o.dr === desiredDir.dr && o.dc === desiredDir.dc);
         if (preferred) pmPac.dir = preferred;
-        else if (options.length) pmPac.dir = options[Math.floor(Math.random() * options.length)];
+        else if (nonReverse.length) pmPac.dir = nonReverse[Math.floor(Math.random() * nonReverse.length)];
+        else if (options.length) pmPac.dir = options[0];
       }
       pmWrapTunnel(pmPac);
     }
