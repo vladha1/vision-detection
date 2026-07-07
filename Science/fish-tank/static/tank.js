@@ -14,6 +14,7 @@ const WATER_COLOR = '#0a2846';
 const WANDER_SWAY_FREQ = 0.6;   // radians/sec - speed of the side-to-side sway
 const WANDER_SWAY_AMOUNT = 0.9; // radians - how wide the sway is
 const MAX_TURN_RATE = Math.PI * 1.4; // radians/sec - caps how fast the sprite can visually turn
+const FISH_MOODS = ['dance', 'dart', 'wiggle', 'hop']; // spontaneous joyful behaviours
 
 let W = window.innerWidth;
 let H = window.innerHeight;
@@ -94,6 +95,9 @@ class Fish {
     this.wanderPhase = Math.random() * Math.PI * 2;
     this.state = 'wander';
     this.reactUntil = 0;
+    this.mood = null;      // current spontaneous mood (dance/dart/wiggle/hop)
+    this.moodUntil = 0;
+    this.nextMoodAt = 0;
   }
 
   steerToward(target, maxSpeed, arriveRadius) {
@@ -125,6 +129,21 @@ class Fish {
       this.reactUntil = now + REACT_HOLD_SECONDS;
     }
 
+    const reacting = (this.state === 'seek' || this.state === 'flee') && now < this.reactUntil && hand;
+
+    // Spontaneous joyful "moods" while calm - a fish will occasionally dance
+    // (swim in a tight circle), dart, wiggle or hop, just to bring the tank
+    // to life even when nobody's interacting.
+    if (!reacting) {
+      if (!this.nextMoodAt) this.nextMoodAt = now + 2 + Math.random() * 5;
+      if (now >= this.nextMoodAt && now >= this.moodUntil) {
+        this.mood = FISH_MOODS[Math.floor(Math.random() * FISH_MOODS.length)];
+        this.moodUntil = now + (this.mood === 'dance' ? 2.6 : this.mood === 'hop' ? 1.0 : 1.6);
+        this.nextMoodAt = now + 4 + Math.random() * 6;
+      }
+    }
+    const moodActive = !reacting && now < this.moodUntil;
+
     if (this.state === 'seek' && now < this.reactUntil && hand) {
       maxSpeed = SEEK_SPEED;
       steer = add(steer, this.steerToward(hand, maxSpeed, SEEK_ARRIVE_RADIUS));
@@ -134,6 +153,18 @@ class Fish {
     } else {
       this.state = 'wander';
       steer = add(steer, this.wanderForce(now));
+      if (moodActive) {
+        if (this.mood === 'dance') {
+          const perp = rotateVec(norm(this.vel), Math.PI / 2);
+          steer = add(steer, scale(perp, 260)); maxSpeed = 160;
+        } else if (this.mood === 'dart') {
+          steer = add(steer, scale(norm(this.vel), 320)); maxSpeed = 280;
+          if (bubbles.length < 70 && Math.random() < 0.4) bubbles.push(makeBubbleAt(this.pos.x, this.pos.y));
+        } else if (this.mood === 'hop') {
+          steer.y -= 320; maxSpeed = 200;
+        }
+        // 'wiggle' is purely visual (see draw)
+      }
     }
 
     if (this.pos.x < EDGE_MARGIN) steer.x += (EDGE_MARGIN - this.pos.x) * 4;
@@ -155,14 +186,24 @@ class Fish {
     }
   }
 
-  draw() {
+  draw(now = 0) {
     const angle = this.heading;
     const img = this.image;
     const iw = img.width || FISH_LENGTH;
     const ih = img.height || FISH_LENGTH * 0.6;
+    const bob = Math.sin(now * 3 + this.wanderPhase) * 2; // subtle life even at rest
+    let sx = 1, sy = 1;
+    if (this.mood === 'wiggle' && now < this.moodUntil) {
+      sy = 1 + Math.sin(now * 20) * 0.2;   // squash-and-stretch giggle
+      sx = 1 - Math.sin(now * 20) * 0.1;
+    } else if (this.mood === 'dance' && now < this.moodUntil) {
+      const s = 1 + Math.sin(now * 8) * 0.08;
+      sx = s; sy = s;
+    }
     ctx.save();
-    ctx.translate(this.pos.x, this.pos.y);
+    ctx.translate(this.pos.x, this.pos.y + bob);
     ctx.rotate(angle);
+    ctx.scale(sx, sy);
     ctx.drawImage(img, -iw / 2, -ih / 2, iw, ih);
     ctx.restore();
   }
@@ -360,8 +401,8 @@ function drawIntro(now) {
 
 // --- persistent "flowers" scene: a continuously blooming/fading garden,
 // selectable from the admin page instead of the fish tank.
-const GARDEN_TARGET_COUNT = 110;
-const GARDEN_MAX_COUNT = 180; // safety cap so a lingering hand can't spawn forever
+const GARDEN_TARGET_COUNT = 150;
+const GARDEN_MAX_COUNT = 260; // safety cap so a lingering hand can't spawn forever
 const GARDEN_BLOOM_SECONDS = 2.0;
 const GARDEN_SPAWN_CHECK_SECONDS = 0.15;
 const WOBBLE_RADIUS = 380;    // how far a hand's presence reaches into the garden
@@ -482,20 +523,134 @@ function reactFace(now, face) {
   f.faceUntil = now + REACTION_FACE_SECONDS;
 }
 
-// While a hand lingers, occasionally: plant a new flower at the fingertip,
-// relocate a nearby one a little, nudge one gently out of the way, recolor
-// one, turn one into a butterfly, give one an expression - or do nothing at
-// all, so the garden feels alive rather than mechanically responsive.
+// A burst of a few flowers blooming together right at the fingertip.
+function reactBurst(now) {
+  const n = 4 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < n; i++) {
+    if (gardenFlowers.length >= GARDEN_MAX_COUNT) break;
+    const a = Math.random() * Math.PI * 2, r = 10 + Math.random() * 60;
+    spawnGardenFlower(now, hand.x + Math.cos(a) * r, hand.y + Math.sin(a) * r);
+  }
+}
+
+// A ring of flowers blooming in a circle around the hand.
+function reactRing(now) {
+  const n = 6, R = 95;
+  for (let i = 0; i < n; i++) {
+    if (gardenFlowers.length >= GARDEN_MAX_COUNT) break;
+    const a = (i / n) * Math.PI * 2;
+    spawnGardenFlower(now, hand.x + Math.cos(a) * R, hand.y + Math.sin(a) * R);
+  }
+}
+
+function reactSpin(now) {
+  const c = nearbyFlowers(REACTION_NEARBY_RADIUS).filter(f => f.spinStart === undefined);
+  if (!c.length) return;
+  const f = c[Math.floor(Math.random() * c.length)];
+  f.spinStart = now;
+  f.spinDir = Math.random() < 0.5 ? 1 : -1;
+}
+
+function reactPulse(now) {
+  const c = nearbyFlowers(REACTION_NEARBY_RADIUS).filter(f => f.pulseStart === undefined);
+  if (!c.length) return;
+  c[Math.floor(Math.random() * c.length)].pulseStart = now;
+}
+
+function reactRainbow(now) {
+  const c = nearbyFlowers(REACTION_NEARBY_RADIUS);
+  if (!c.length) return;
+  c[Math.floor(Math.random() * c.length)].rainbowUntil = now + 3.5;
+}
+
+function reactSparkle(now) {
+  const c = nearbyFlowers(REACTION_NEARBY_RADIUS);
+  if (!c.length) return;
+  const f = c[Math.floor(Math.random() * c.length)];
+  emitSparkles(f.x, f.y, f.color);
+}
+
+// A staggered bounce that ripples left-to-right through nearby flowers.
+function reactWave(now) {
+  const c = nearbyFlowers(REACTION_NEARBY_RADIUS).filter(f => f.bounceStart === undefined);
+  c.sort((a, b) => a.x - b.x);
+  c.slice(0, 9).forEach((f, i) => { f.bounceStart = now + i * 0.08; });
+}
+
+// While a hand lingers, the garden picks one of many playful reactions -
+// planting, bursting or ringing new blooms, relocating/dodging, recoloring,
+// spinning, pulsing, rainbow-cycling, sparkling, a rippling wave, turning a
+// flower into a butterfly, or a facial expression - or, less often now, doing
+// nothing, so it feels lively and generous rather than idle.
 const REACTIONS = [
-  { weight: 2.5, action: reactSpawn },
-  { weight: 2.5, action: reactRelocate },
-  { weight: 2, action: reactDodge },
-  { weight: 2, action: reactRecolor },
-  { weight: 1, action: reactBecomeButterfly },
-  { weight: 1.2, action: (now) => reactFace(now, 'scared') },
-  { weight: 1.2, action: (now) => reactFace(now, 'happy') },
-  { weight: 4, action: null }, // no reaction - keeps it calm rather than constantly busy
+  { weight: 2.0, action: reactSpawn },
+  { weight: 1.6, action: reactRelocate },
+  { weight: 1.4, action: reactDodge },
+  { weight: 1.6, action: reactRecolor },
+  { weight: 1.8, action: reactBurst },
+  { weight: 1.0, action: reactRing },
+  { weight: 1.6, action: reactSpin },
+  { weight: 1.6, action: reactPulse },
+  { weight: 1.2, action: reactRainbow },
+  { weight: 1.8, action: reactSparkle },
+  { weight: 1.2, action: reactWave },
+  { weight: 0.8, action: reactBecomeButterfly },
+  { weight: 1.0, action: (now) => reactFace(now, 'scared') },
+  { weight: 1.0, action: (now) => reactFace(now, 'happy') },
+  { weight: 2.0, action: null }, // occasional pause - keeps it from feeling frantic
 ];
+
+// --- sparkles: short-lived glints thrown off by a sparkling flower ---
+let sparkles = [];
+function emitSparkles(x, y, color) {
+  for (let i = 0; i < 12; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 120;
+    sparkles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40, life: 0.7 + Math.random() * 0.7, age: 0, color, r: 2 + Math.random() * 3 });
+  }
+}
+function updateAndDrawSparkles(dt) {
+  sparkles = sparkles.filter(s => {
+    s.age += dt; s.vy += 180 * dt; s.x += s.vx * dt; s.y += s.vy * dt;
+    return s.age < s.life;
+  });
+  for (const s of sparkles) {
+    ctx.globalAlpha = Math.max(0, 1 - s.age / s.life);
+    ctx.fillStyle = s.color;
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// --- drifting petals: gentle ambient motion so the whole frame feels alive ---
+let petals = [];
+function makePetal(y) {
+  return {
+    x: Math.random() * W,
+    y: y !== undefined ? y : -10,
+    vy: 8 + Math.random() * 20,
+    drift: (Math.random() - 0.5) * 26,
+    seed: Math.random() * Math.PI * 2,
+    r: 2.5 + Math.random() * 3.5,
+    color: FLOWER_COLORS[Math.floor(Math.random() * FLOWER_COLORS.length)],
+  };
+}
+function initPetals() {
+  petals = [];
+  for (let i = 0; i < 30; i++) petals.push(makePetal(Math.random() * H));
+}
+function drawPetals(now, dt) {
+  ctx.globalAlpha = 0.5;
+  for (const p of petals) {
+    p.y += p.vy * dt;
+    p.x += Math.sin(now * 0.8 + p.seed) * p.drift * dt;
+    if (p.y > H + 10) Object.assign(p, makePetal(-10));
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y, p.r, p.r * 0.55, now * 0.5 + p.seed, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
 
 function triggerHandReaction(now) {
   const total = REACTIONS.reduce((sum, r) => sum + r.weight, 0);
@@ -516,7 +671,7 @@ let grassBlades = [];
 
 function initGrass() {
   grassBlades = [];
-  const count = Math.max(20, Math.floor(W / 16));
+  const count = Math.max(30, Math.floor(W / 11));
   for (let i = 0; i < count; i++) {
     grassBlades.push({
       x: (i / count) * W + (Math.random() - 0.5) * 16,
@@ -556,7 +711,7 @@ function drawGrass(now) {
 // --- butterflies: a small ambient population that flutters around
 // continuously, independent of the flower lifecycle.
 const BUTTERFLY_COLORS = ['#fff176', '#ff8a65', '#ba68c8', '#4fc3f7', '#f06292'];
-const BUTTERFLY_COUNT = 6;
+const BUTTERFLY_COUNT = 10;
 let butterflies = [];
 
 function spawnButterfly(x, y, color) {
@@ -665,10 +820,12 @@ function drawFlowerScene(now, dt) {
     gardenInitialized = true;
     initGrass();
     initButterflies();
+    initPetals();
   }
 
   ctx.fillStyle = '#03121f';
   ctx.fillRect(0, 0, W, H);
+  drawPetals(now, dt);
   drawGrass(now);
 
   if (gardenFlowers.length < GARDEN_TARGET_COUNT && now - lastGardenSpawnCheck > GARDEN_SPAWN_CHECK_SECONDS) {
@@ -707,6 +864,11 @@ function drawFlowerScene(now, dt) {
       if (ct >= 1) f.colorChangeStart = undefined;
     }
 
+    if (f.rainbowUntil !== undefined) {
+      if (now < f.rainbowUntil) f.color = `hsl(${Math.round(now * 130) % 360}, 80%, 66%)`;
+      else f.rainbowUntil = undefined;
+    }
+
     let growth, alpha;
     if (age < GARDEN_BLOOM_SECONDS) {
       growth = smoothstep(age / GARDEN_BLOOM_SECONDS);
@@ -720,6 +882,25 @@ function drawFlowerScene(now, dt) {
     }
 
     let wobble = 0;
+    // Spin: two eased full turns (4π returns to the original angle, so no
+    // permanent offset). Pulse: balloon up to ~1.8x and back.
+    if (f.spinStart !== undefined) {
+      const st = Math.min(1, (now - f.spinStart) / 1.6);
+      wobble += f.spinDir * smoothstep(st) * Math.PI * 4;
+      if (st >= 1) f.spinStart = undefined;
+    }
+    if (f.pulseStart !== undefined) {
+      const pt = Math.min(1, (now - f.pulseStart) / 1.2);
+      growth *= 1 + Math.sin(pt * Math.PI) * 0.8;
+      if (pt >= 1) f.pulseStart = undefined;
+    }
+    let bounceY = 0;
+    if (f.bounceStart !== undefined && now >= f.bounceStart) {
+      const bt = (now - f.bounceStart) / 0.5;
+      if (bt >= 1) f.bounceStart = undefined;
+      else bounceY = -Math.sin(bt * Math.PI) * 26;
+    }
+
     let leanX = 0, leanY = 0;
     if (hand) {
       const d = dist(f, hand);
@@ -746,13 +927,14 @@ function drawFlowerScene(now, dt) {
     const face = (f.faceState && now < f.faceUntil) ? f.faceState : null;
     const origX = f.x, origY = f.y;
     f.x += leanX;
-    f.y += leanY + riseY;
+    f.y += leanY + riseY + bounceY;
     drawFlower(f, growth, alpha, wobble, face);
     f.x = origX;
     f.y = origY;
     return true;
   });
 
+  updateAndDrawSparkles(dt);
   updateAndDrawButterflies(now, dt);
 }
 
@@ -1616,6 +1798,112 @@ function drawDrivingScene(now, dt) {
   ctx.restore();
 }
 
+// ============================================================================
+// Fish scene ambience: gradient water, light rays, swaying kelp, a sandy
+// floor and rising bubbles - so the tank feels like a full, living reef
+// around the fish rather than a bare blue rectangle.
+// ============================================================================
+let fishSceneInit = false;
+let bubbles = [];
+let kelp = [];
+
+function makeBubble(y) {
+  return {
+    x: Math.random() * W,
+    y: y !== undefined ? y : H + 10,
+    r: 2 + Math.random() * 6,
+    speed: 20 + Math.random() * 55,
+    wobbleSeed: Math.random() * Math.PI * 2,
+  };
+}
+
+function makeBubbleAt(x, y) {
+  return { x, y, r: 2 + Math.random() * 3, speed: 30 + Math.random() * 45, wobbleSeed: Math.random() * Math.PI * 2 };
+}
+
+function initFishScene() {
+  fishSceneInit = true;
+  bubbles = [];
+  for (let i = 0; i < 40; i++) bubbles.push(makeBubble(Math.random() * H));
+  kelp = [];
+  const strands = 8 + Math.floor(W / 200);
+  for (let i = 0; i < strands; i++) {
+    kelp.push({
+      x: (i + 0.5) / strands * W + (Math.random() - 0.5) * 70,
+      height: 130 + Math.random() * 230,
+      phase: Math.random() * Math.PI * 2,
+      width: 9 + Math.random() * 13,
+      hue: 120 + Math.random() * 45,
+    });
+  }
+}
+
+function drawFishScene(now, dt) {
+  if (!fishSceneInit) initFishScene();
+
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#0d3f68');
+  g.addColorStop(0.55, WATER_COLOR);
+  g.addColorStop(1, '#05131f');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  // slow, angled shafts of light
+  ctx.save();
+  ctx.globalAlpha = 0.05;
+  ctx.fillStyle = '#cdeaff';
+  for (let i = 0; i < 4; i++) {
+    const x = ((i + 0.5) / 4) * W + Math.sin(now * 0.2 + i) * 40;
+    ctx.beginPath();
+    ctx.moveTo(x - 35, 0); ctx.lineTo(x + 35, 0); ctx.lineTo(x + 130, H); ctx.lineTo(x - 30, H);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+
+  // swaying kelp rooted to the floor
+  ctx.lineCap = 'round';
+  for (const k of kelp) {
+    ctx.strokeStyle = `hsl(${k.hue}, 55%, 32%)`;
+    ctx.lineWidth = k.width;
+    ctx.beginPath();
+    const segs = 8;
+    for (let s = 0; s <= segs; s++) {
+      const t = s / segs;
+      const y = H - t * k.height;
+      const x = k.x + Math.sin(now * 1.1 + k.phase + t * 2.2) * 24 * t;
+      if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // rising bubbles
+  ctx.strokeStyle = 'rgba(200,230,255,0.45)';
+  ctx.lineWidth = 1.5;
+  for (const b of bubbles) {
+    b.y -= b.speed * dt;
+    b.x += Math.sin(now * 2 + b.wobbleSeed) * 0.5;
+    if (b.y < -10) Object.assign(b, makeBubble());
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // sandy floor
+  ctx.fillStyle = '#c9ad7a';
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  ctx.lineTo(0, H - 22);
+  for (let x = 0; x <= W; x += 40) ctx.lineTo(x, H - 22 + Math.sin(x * 0.05) * 6);
+  ctx.lineTo(W, H);
+  ctx.closePath();
+  ctx.fill();
+
+  for (const f of fishes) {
+    f.update(hand, now, dt);
+    f.draw(now);
+  }
+}
+
 let lastTime = performance.now();
 function frame(t) {
   const dt = Math.min(0.05, (t - lastTime) / 1000);
@@ -1629,12 +1917,7 @@ function frame(t) {
   } else if (currentScene === 'driving') {
     drawDrivingScene(now, dt);
   } else {
-    ctx.fillStyle = WATER_COLOR;
-    ctx.fillRect(0, 0, W, H);
-    for (const f of fishes) {
-      f.update(hand, now, dt);
-      f.draw();
-    }
+    drawFishScene(now, dt);
   }
 
   if (introActive) {
