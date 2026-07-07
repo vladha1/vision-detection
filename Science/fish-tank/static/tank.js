@@ -1019,12 +1019,18 @@ function pmBestStepToward(r, c, currentDir, dist) {
   if (!options.length) return currentDir;
   const finite = options.filter(o => o.dist < Infinity);
   const pool = finite.length ? finite : options;
-  const nonReverse = pool.filter(o => !(o.dr === reverseDir.dr && o.dc === reverseDir.dc));
-  const candidates = nonReverse.length ? nonReverse : pool;
-  const bestDist = Math.min(...candidates.map(o => o.dist));
-  const tied = candidates.filter(o => o.dist === bestDist);
+
+  // Distance decides first, among ALL options including reversing - if
+  // turning around really is the shortest path (target is behind), it has
+  // to win outright instead of being excluded upfront. Only among options
+  // that are TIED for best does it prefer continuing straight, then any
+  // other turn, and reverse last.
+  const bestDist = Math.min(...pool.map(o => o.dist));
+  const tied = pool.filter(o => o.dist === bestDist);
   const keepCurrent = tied.find(o => o.dr === currentDir.dr && o.dc === currentDir.dc);
-  return keepCurrent || tied[0];
+  if (keepCurrent) return keepCurrent;
+  const nonReverseTied = tied.filter(o => !(o.dr === reverseDir.dr && o.dc === reverseDir.dc));
+  return nonReverseTied.length ? nonReverseTied[0] : tied[0];
 }
 
 function pmResetPositions() {
@@ -1048,8 +1054,14 @@ function pmInit() {
 
 function pmMoveGhost(g, dt, frightened) {
   const atCenter = Math.abs(g.row - Math.round(g.row)) < 0.1 && Math.abs(g.col - Math.round(g.col)) < 0.1;
-  if (atCenter) {
-    const r = Math.round(g.row), c = Math.round(g.col);
+  const r = Math.round(g.row), c = Math.round(g.col);
+  const cellKey = `${r},${c}`;
+  // Only make ONE direction decision per intersection visit - re-rolling a
+  // fresh random direction every single frame while lingering near center
+  // (this ran every frame atCenter was true) could flip-flop between
+  // opposite directions frame to frame and net out to barely moving at all.
+  if (atCenter && g.lastDecisionCell !== cellKey) {
+    g.lastDecisionCell = cellKey;
     const options = [{ dr: -1, dc: 0 }, { dr: 1, dc: 0 }, { dr: 0, dc: -1 }, { dr: 0, dc: 1 }]
       .filter(d => !pmIsWall(r + d.dr, c + d.dc) && !(d.dr === -g.dir.dr && d.dc === -g.dir.dc));
     if (options.length) {
@@ -1065,6 +1077,8 @@ function pmMoveGhost(g, dt, frightened) {
         g.dir = options[Math.floor(Math.random() * options.length)];
       }
     }
+  } else if (!atCenter) {
+    g.lastDecisionCell = null; // clear once clearly away from center, ready for the next intersection
   }
   const speed = frightened ? PM_GHOST_SPEED * 0.6 : PM_GHOST_SPEED;
   g.row += g.dir.dr * speed * dt;
