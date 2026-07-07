@@ -1042,10 +1042,27 @@ function drawHandMarker(now) {
   const mx = confine ? Math.max(pmBoardBounds.left, Math.min(pmBoardBounds.right, source.x)) : source.x;
   const my = confine ? Math.max(pmBoardBounds.top, Math.min(pmBoardBounds.bottom, source.y)) : source.y;
 
-  drawGlow(mx, my, 70 * pulse, 'rgba(255,255,180,0.4)');
+  if (currentScene !== 'paint' && currentScene !== 'constellation') {
+    drawGlow(mx, my, 70 * pulse, 'rgba(255,255,180,0.4)');
+  }
   if (currentScene === 'flowers') {
     const marker = { x: mx, y: my, maxRadius: 24 * pulse, petals: 6, color: HAND_MARKER_COLOR, kind: 'daisy', rotation: now * 0.6 };
     drawFlower(marker, 1, 0.85, 0);
+  } else if (currentScene === 'paint') {
+    // a soft white "brush tip" so you can see where the light will land
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.beginPath(); ctx.arc(mx, my, 7 * pulse, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  } else if (currentScene === 'constellation') {
+    // a cool glowing star-cursor that hints at the next star to connect
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    drawGlow(mx, my, 26 * pulse, 'rgba(150,190,255,0.7)');
+    ctx.fillStyle = 'rgba(215,232,255,0.95)';
+    ctx.beginPath(); ctx.arc(mx, my, 4 * pulse, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
   } else if (currentScene === 'fish') {
     const img = getHandMarkerFish();
     const s = 0.45 * pulse;
@@ -1904,6 +1921,185 @@ function drawFishScene(now, dt) {
   }
 }
 
+// ============================================================================
+// Paint / light-graffiti wall: the hand lays down a glowing, colour-cycling
+// light trail that slowly evaporates. Paint accumulates on a persistent
+// offscreen layer (not a growing point list), so long strokes stay fast.
+// ============================================================================
+let paintLayer = null, paintLayerCtx = null, paintLayerW = 0, paintLayerH = 0;
+let paintLast = null;
+let paintDrips = [];
+const PAINT_FADE_SECONDS = 7; // how long paint takes to evaporate to black
+
+function ensurePaintLayer() {
+  const w = Math.max(1, W | 0), h = Math.max(1, H | 0);
+  if (!paintLayer || paintLayerW !== w || paintLayerH !== h) {
+    paintLayer = document.createElement('canvas');
+    paintLayer.width = w; paintLayer.height = h;
+    paintLayerCtx = paintLayer.getContext('2d');
+    paintLayerW = w; paintLayerH = h;
+  }
+}
+
+function paintGlow(p, x, y, r, hue, alpha) {
+  const g = p.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, `hsla(${hue},100%,72%,${alpha})`);
+  g.addColorStop(0.4, `hsla(${hue},100%,55%,${alpha * 0.6})`);
+  g.addColorStop(1, `hsla(${hue},100%,50%,0)`);
+  p.fillStyle = g;
+  p.beginPath(); p.arc(x, y, r, 0, Math.PI * 2); p.fill();
+}
+
+function drawPaintScene(now, dt) {
+  ensurePaintLayer();
+  const p = paintLayerCtx;
+
+  // evaporate: gently fade the whole accumulated layer toward black
+  p.globalCompositeOperation = 'source-over';
+  p.fillStyle = `rgba(5,6,10,${Math.min(1, dt / PAINT_FADE_SECONDS)})`;
+  p.fillRect(0, 0, W, H);
+
+  p.globalCompositeOperation = 'lighter';
+  const hue = (now * 55) % 360; // continuous rainbow along a stroke
+  if (hand) {
+    const cur = { x: hand.x, y: hand.y };
+    if (paintLast) {
+      const d = Math.hypot(cur.x - paintLast.x, cur.y - paintLast.y);
+      const steps = Math.min(30, Math.max(1, Math.floor(d / 8))); // fill gaps on fast moves
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps;
+        paintGlow(p, paintLast.x + (cur.x - paintLast.x) * t, paintLast.y + (cur.y - paintLast.y) * t, 26, hue, 0.5);
+      }
+    } else {
+      paintGlow(p, cur.x, cur.y, 26, hue, 0.5);
+    }
+    paintLast = cur;
+    if (Math.random() < 0.12) paintDrips.push({ x: cur.x, y: cur.y, vy: 15 + Math.random() * 35, hue, r: 8 + Math.random() * 6, life: 0 });
+  } else {
+    paintLast = null;
+  }
+
+  // drips run down the wall, painting a fading streak
+  paintDrips = paintDrips.filter(dp => {
+    dp.vy += 45 * dt; dp.y += dp.vy * dt; dp.life += dt;
+    if (dp.y > H || dp.life > PAINT_FADE_SECONDS) return false;
+    paintGlow(p, dp.x, dp.y, dp.r, dp.hue, 0.22);
+    return true;
+  });
+  p.globalCompositeOperation = 'source-over';
+
+  ctx.fillStyle = '#05060a';
+  ctx.fillRect(0, 0, W, H);
+  ctx.drawImage(paintLayer, 0, 0);
+}
+
+// ============================================================================
+// Constellation drawer: a night sky of stars. Move your hand from star to
+// star to connect them into glowing constellations; pause or lift your hand
+// and the finished shape is committed and slowly fades among the stars.
+// ============================================================================
+let constInit = false;
+let stars = [];
+let activePath = [];      // star indices being connected right now
+let doneConstellations = [];
+let lastConnectAt = 0;
+let constHue = 200;
+const STAR_CONNECT_RADIUS = 60;
+const CONST_IDLE_FINALIZE = 1.6;  // seconds hovering with no new star -> commit
+const CONST_FADE_SECONDS = 16;
+
+function initConstellation() {
+  constInit = true;
+  stars = [];
+  const count = Math.max(50, Math.floor((W * H) / 17000));
+  for (let i = 0; i < count; i++) {
+    stars.push({ x: Math.random() * W, y: Math.random() * H, r: 0.8 + Math.random() * 2.2, tw: Math.random() * Math.PI * 2, twSpeed: 0.5 + Math.random() * 1.5 });
+  }
+}
+
+function drawConstPath(points, hue, alpha) {
+  if (points.length < 1) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.strokeStyle = `hsla(${hue},90%,66%,${0.85 * alpha})`;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.shadowColor = `hsl(${hue},90%,60%)`;
+  ctx.shadowBlur = 10;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  for (const pt of points) {
+    ctx.fillStyle = `hsla(${hue},90%,78%,${alpha})`;
+    ctx.beginPath(); ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function finalizeConstellation(now) {
+  if (activePath.length >= 2) {
+    doneConstellations.push({ points: activePath.map(i => ({ x: stars[i].x, y: stars[i].y })), born: now, hue: constHue });
+  }
+  activePath = [];
+}
+
+function drawConstellationScene(now, dt) {
+  if (!constInit) initConstellation();
+
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#05030f'); g.addColorStop(1, '#0b0922');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  for (const s of stars) {
+    const tw = 0.55 + 0.45 * Math.sin(now * s.twSpeed + s.tw);
+    ctx.fillStyle = `rgba(255,255,240,${tw})`;
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+  }
+
+  doneConstellations = doneConstellations.filter(c => {
+    const age = now - c.born;
+    if (age > CONST_FADE_SECONDS) return false;
+    const a = Math.min(1, 2 - 2 * age / CONST_FADE_SECONDS); // hold, then fade
+    drawConstPath(c.points, c.hue, Math.max(0, a));
+    return true;
+  });
+
+  if (hand) {
+    let nearest = -1, nd = STAR_CONNECT_RADIUS;
+    for (let i = 0; i < stars.length; i++) {
+      const d = Math.hypot(stars[i].x - hand.x, stars[i].y - hand.y);
+      if (d < nd) { nd = d; nearest = i; }
+    }
+    if (nearest >= 0) {
+      const last = activePath[activePath.length - 1];
+      if (last !== nearest && !activePath.includes(nearest)) {
+        activePath.push(nearest);
+        lastConnectAt = now;
+        constHue = (constHue + 24) % 360;
+      }
+    }
+    if (activePath.length >= 2 && now - lastConnectAt > CONST_IDLE_FINALIZE) {
+      finalizeConstellation(now);
+    }
+  } else {
+    finalizeConstellation(now); // hand lost - commit whatever's there
+  }
+
+  if (activePath.length) {
+    const pts = activePath.map(i => ({ x: stars[i].x, y: stars[i].y }));
+    drawConstPath(pts, constHue, 1);
+    if (hand) {
+      const s = stars[activePath[activePath.length - 1]];
+      ctx.strokeStyle = `hsla(${constHue},90%,72%,0.4)`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(hand.x, hand.y); ctx.stroke();
+    }
+  }
+}
+
 let lastTime = performance.now();
 function frame(t) {
   const dt = Math.min(0.05, (t - lastTime) / 1000);
@@ -1916,6 +2112,10 @@ function frame(t) {
     drawPacmanScene(now, dt);
   } else if (currentScene === 'driving') {
     drawDrivingScene(now, dt);
+  } else if (currentScene === 'paint') {
+    drawPaintScene(now, dt);
+  } else if (currentScene === 'constellation') {
+    drawConstellationScene(now, dt);
   } else {
     drawFishScene(now, dt);
   }
