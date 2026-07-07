@@ -4,12 +4,40 @@
 // score to show it here.
 
 const buttons = document.querySelectorAll('.dpad button');
+const dpadEl = document.querySelector('.dpad');
+const scoreboardEl = document.querySelector('.scoreboard');
 const scoreEl = document.getElementById('score');
 const livesEl = document.getElementById('lives');
 const statusEl = document.getElementById('status');
+const modeToggle = document.getElementById('modeToggle');
 
 let currentDir = null;
 let online = false;
+let mode = 'hand';
+
+function renderMode() {
+  const active = mode === 'controller';
+  modeToggle.textContent = active ? 'Release to hand tracking' : 'Take control';
+  modeToggle.classList.toggle('on', active);
+  dpadEl.classList.toggle('live', active);
+  scoreboardEl.classList.toggle('live', active);
+}
+
+async function setMode(next) {
+  try {
+    mode = (await (await fetch('/api/inputmode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: next }),
+    })).json()).mode;
+    setOnline(true);
+  } catch (e) {
+    setOnline(false);
+  }
+  renderMode();
+}
+
+modeToggle.addEventListener('click', () => setMode(mode === 'controller' ? 'hand' : 'controller'));
 
 async function sendDir(dir) {
   try {
@@ -27,11 +55,13 @@ async function sendDir(dir) {
 function setOnline(ok) {
   if (ok === online) return;
   online = ok;
-  statusEl.textContent = ok ? 'Connected — you have control' : 'Reconnecting…';
-  statusEl.className = ok ? 'on' : '';
+  if (!ok) { statusEl.textContent = 'Reconnecting…'; statusEl.className = ''; return; }
+  statusEl.textContent = mode === 'controller' ? 'You have control' : 'Hand tracking is active';
+  statusEl.className = mode === 'controller' ? 'on' : '';
 }
 
 function press(dir) {
+  if (mode !== 'controller') return; // must take control first
   currentDir = dir;
   for (const b of buttons) b.classList.toggle('held', b.dataset.dir === dir);
   sendDir(dir);
@@ -51,20 +81,20 @@ window.addEventListener('keydown', (e) => {
   if (map[e.key]) { e.preventDefault(); press(map[e.key]); }
 });
 
-// Heartbeat: keep the controller "active" even when idle so the display keeps
-// ignoring the hand and staying in arrow mode.
-setInterval(() => sendDir(currentDir), 1000);
-sendDir(null);
-
-async function pollScore() {
+async function poll() {
   try {
-    const s = await (await fetch('/api/pmstate')).json();
+    const [s, c] = await Promise.all([
+      (await fetch('/api/pmstate')).json(),
+      (await fetch('/api/control')).json(),
+    ]);
     scoreEl.textContent = s.score;
     livesEl.textContent = Math.max(0, s.lives);
+    if (c.mode !== mode) { mode = c.mode; renderMode(); } // reflect admin-side changes
     setOnline(true);
   } catch (e) {
     setOnline(false);
   }
 }
-pollScore();
-setInterval(pollScore, 600);
+renderMode();
+poll();
+setInterval(poll, 600);

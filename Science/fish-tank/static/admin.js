@@ -10,9 +10,13 @@ const preview = document.getElementById('preview');
 const dropHint = document.getElementById('dropHint');
 const submitBtn = document.getElementById('submitBtn');
 const sceneToggle = document.getElementById('sceneToggle');
+const inputModeToggle = document.getElementById('inputModeToggle');
 
 let availableScenes = [];
 let activeScene = null;
+
+const INPUT_MODES = [['hand', 'Hand tracking'], ['controller', 'Phone controller']];
+let activeInputMode = 'hand';
 
 async function loadScenes() {
   const [scenesRes, currentRes] = await Promise.all([fetch('/api/scenes'), fetch('/api/scene')]);
@@ -44,6 +48,35 @@ async function setScene(scene) {
 }
 
 loadScenes();
+
+async function loadInputMode() {
+  activeInputMode = (await (await fetch('/api/inputmode')).json()).mode;
+  renderInputModeToggle();
+}
+
+function renderInputModeToggle() {
+  inputModeToggle.innerHTML = '';
+  for (const [value, label] of INPUT_MODES) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = label;
+    btn.className = value === activeInputMode ? 'active' : '';
+    btn.onclick = () => setInputMode(value);
+    inputModeToggle.appendChild(btn);
+  }
+}
+
+async function setInputMode(mode) {
+  activeInputMode = (await (await fetch('/api/inputmode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  })).json()).mode;
+  renderInputModeToggle();
+}
+
+loadInputMode();
+setInterval(loadInputMode, 3000); // reflect changes made from the controller page
 
 fileInput.addEventListener('change', () => showPreview(fileInput.files[0]));
 

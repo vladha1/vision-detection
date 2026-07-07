@@ -92,19 +92,17 @@ if not os.path.exists(STATE_PATH):
 current_scene = load_scene()
 scene_lock = threading.Lock()
 
-# Mobile controller relay. A phone at /controller posts arrow presses here;
-# the projector display polls them and drives Pac-Man. A controller counts as
-# "active" as long as it has pinged within CONTROL_TIMEOUT seconds, during
-# which the Pac-Man scene ignores the camera hand entirely.
-CONTROL_TIMEOUT = 2.5
+# Mobile controller relay. A phone at /controller posts arrow presses here and
+# the projector display polls them to drive Pac-Man. Which input is live -
+# camera hand or phone arrows - is an explicit switch (input_state["mode"]),
+# set from the admin page or the controller page, not auto-detected. In
+# "controller" mode the Pac-Man scene ignores the camera hand entirely.
 CONTROL_DIRS = ("up", "down", "left", "right")
-pm_control = {"dir": None, "ts": 0.0}
+INPUT_MODES = ("hand", "controller")
+pm_control = {"dir": None}
 pm_state = {"score": 0, "lives": 3}
+input_state = {"mode": "hand"}
 control_lock = threading.Lock()
-
-
-def controller_active():
-    return (time.time() - pm_control["ts"]) < CONTROL_TIMEOUT
 
 
 app = Flask(__name__)
@@ -161,9 +159,9 @@ def api_scene_set():
 
 @app.route("/api/hand")
 def api_hand():
-    # While a mobile controller is driving the Pac-Man scene, don't recognize
-    # the hand at all - the phone is in charge.
-    if current_scene == "pacman" and controller_active():
+    # While the phone controller is the chosen input, don't recognize the hand
+    # at all on the Pac-Man scene - the phone is in charge.
+    if current_scene == "pacman" and input_state["mode"] == "controller":
         return jsonify(None)
     hand = tracker.get_hand()
     if hand is not None and hand[1] > PLAYABLE_HEIGHT:
@@ -177,16 +175,33 @@ def api_control_set():
     direction = data.get("dir")
     with control_lock:
         if direction in CONTROL_DIRS:
-            pm_control["dir"] = direction
-        pm_control["ts"] = time.time()  # any request is also a keep-alive ping
+            pm_control["dir"] = direction  # last press persists, classic-arcade style
     return jsonify({"ok": True})
 
 
 @app.route("/api/control")
 def api_control_get():
     with control_lock:
-        active = controller_active()
-        return jsonify({"dir": pm_control["dir"] if active else None, "active": active})
+        return jsonify({"dir": pm_control["dir"], "mode": input_state["mode"]})
+
+
+@app.route("/api/inputmode", methods=["POST"])
+def api_inputmode_set():
+    data = request.get_json(force=True, silent=True) or {}
+    mode = data.get("mode")
+    if mode not in INPUT_MODES:
+        return jsonify({"error": f"mode must be one of {INPUT_MODES}"}), 400
+    with control_lock:
+        input_state["mode"] = mode
+        if mode == "controller":
+            pm_control["dir"] = None  # start fresh: wait for a press
+    return jsonify({"mode": mode})
+
+
+@app.route("/api/inputmode")
+def api_inputmode_get():
+    with control_lock:
+        return jsonify({"mode": input_state["mode"]})
 
 
 @app.route("/api/pmstate", methods=["POST"])

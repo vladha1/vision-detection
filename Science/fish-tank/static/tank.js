@@ -781,8 +781,8 @@ let pmArrowDir = null;
 async function syncControl() {
   try {
     const d = await (await fetch('/api/control')).json();
-    pmControllerActive = !!d.active;
-    pmArrowDir = (d.active && d.dir && PM_ARROW_VECTORS[d.dir]) ? PM_ARROW_VECTORS[d.dir] : null;
+    pmControllerActive = d.mode === 'controller';
+    pmArrowDir = (d.dir && PM_ARROW_VECTORS[d.dir]) ? PM_ARROW_VECTORS[d.dir] : null;
   } catch (e) {
     pmControllerActive = false;
     pmArrowDir = null;
