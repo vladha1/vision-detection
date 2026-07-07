@@ -793,32 +793,22 @@ let handMarkerHeading = 0;
 let handMarkerLastPos = null;
 
 function drawHandMarker(now) {
-  const isPacman = currentScene === 'pacman';
-
-  // Pac-Man's cursor is a persistent point (computed in drawPacmanScene)
-  // that keeps rendering at its last position even while the hand is
-  // momentarily untracked, instead of disappearing. Every other scene
-  // hides the marker as soon as the hand is lost, same as before.
-  if (isPacman) {
-    if (pmCursorPxX === null) return;
-  } else {
-    if (!hand) {
-      handMarkerLastPos = null;
-      return;
-    }
-    if (handMarkerLastPos) {
-      const dx = hand.x - handMarkerLastPos.x;
-      const dy = hand.y - handMarkerLastPos.y;
-      if (Math.hypot(dx, dy) > 2) {
-        handMarkerHeading = Math.atan2(dy, dx);
-      }
-    }
-    handMarkerLastPos = { x: hand.x, y: hand.y };
+  if (!hand) {
+    handMarkerLastPos = null;
+    return;
   }
+  if (handMarkerLastPos) {
+    const dx = hand.x - handMarkerLastPos.x;
+    const dy = hand.y - handMarkerLastPos.y;
+    if (Math.hypot(dx, dy) > 2) {
+      handMarkerHeading = Math.atan2(dy, dx);
+    }
+  }
+  handMarkerLastPos = { x: hand.x, y: hand.y };
 
   const pulse = 1 + Math.sin(now * 3) * 0.12;
-  const mx = isPacman ? pmCursorPxX : hand.x;
-  const my = isPacman ? pmCursorPxY : hand.y;
+  const mx = hand.x;
+  const my = hand.y;
 
   drawGlow(mx, my, 70 * pulse, 'rgba(255,255,180,0.4)');
   if (currentScene === 'flowers') {
@@ -906,8 +896,14 @@ const PM_ROWS = PM_RAW_MAP.length;
 const PM_SPEED = 3.0; // cells/sec - slower than before so there's a real reaction window
 const PM_GHOST_SPEED = 2.4;
 const PM_TURN_TOLERANCE = 0.32; // how close to a cell center counts as "at an intersection" - wide enough that the ~100ms hand-tracking update interval reliably lands inside it
-const PM_QUEUE_DEADZONE = 0.45; // cells - ignore hand movement smaller than this so the queued direction doesn't flicker
-const PM_CURSOR_PULL_SPEED = 9; // cells/sec - how fast the cursor "catches up" to the hand, so it slides smoothly instead of jumping between corridors
+// Steering is a big-zone system (which quarter of the board, relative to a
+// fixed center point) rather than tracking precise cursor position - a
+// nearest-open-cell search near a wall boundary can flip corridors on tiny
+// camera noise, and no amount of smoothing the cursor's motion fixes a
+// target that itself keeps flipping. Big zones plus a sustain requirement
+// are naturally tolerant of that noise.
+const PM_ZONE_DEADZONE_FRAC = 0.12; // fraction of the board's half-size treated as "too close to center, no clear zone"
+const PM_ZONE_SUSTAIN_SECONDS = 0.18; // a candidate zone must hold this long before it's accepted, filtering single-frame noise
 const PM_TUNNEL_ROW = 10; // left/right wraparound passage, classic Pac-Man style
 const PM_POWER_DURATION = 7;
 const PM_POWER_COLOR = '#2233dd';
@@ -921,15 +917,12 @@ let pmPowerUntil = 0;
 let pmPac = null;
 let pmGhosts = null;
 let pmQueuedDir = null; // persists across frames like a classic key-buffer, instead of being recomputed fresh every frame
-let pmCursorRow = null; // the smoothed, corridor-following cursor - persists across frames and hand dropouts
-let pmCursorCol = null;
-let pmHandWasPresent = false;
+let pmZoneCandidate = null; // the zone the hand is currently sitting in, before it's held long enough to be accepted
+let pmZoneCandidateSince = 0;
 let pmCaughtUntil = 0;
 let pmStarted = false;
 let pmScore = 0;
 let pmInitialized = false;
-let pmCursorPxX = null;
-let pmCursorPxY = null;
 
 function pmBuildMaze() {
   return PM_RAW_MAP.map(row => row.map(v => (v === 0 || v === 3) ? 1 : 0));
@@ -954,41 +947,10 @@ function pmIsWall(row, col) {
   return pmGrid[r][c] === 1;
 }
 
-// Confines a raw (row, col) to the maze bounds and, if it lands on a wall,
-// to the nearest open cell - so the cursor always reads as "somewhere on
-// the board/trails" instead of floating over a wall block.
-function pmNearestOpenCell(row, col) {
-  const r0 = Math.max(0, Math.min(PM_ROWS - 1, Math.round(row)));
-  const c0 = Math.max(0, Math.min(PM_COLS - 1, Math.round(col)));
-  if (!pmIsWall(r0, c0)) return { row: r0, col: c0 };
-  const maxRadius = Math.max(PM_ROWS, PM_COLS);
-  for (let radius = 1; radius <= maxRadius; radius++) {
-    for (let dr = -radius; dr <= radius; dr++) {
-      for (let dc = -radius; dc <= radius; dc++) {
-        if (Math.max(Math.abs(dr), Math.abs(dc)) !== radius) continue;
-        const rr = r0 + dr, cc = c0 + dc;
-        if (rr < 0 || rr >= PM_ROWS || cc < 0 || cc >= PM_COLS) continue;
-        if (!pmIsWall(rr, cc)) return { row: rr, col: cc };
-      }
-    }
-  }
-  return { row: r0, col: c0 };
-}
-
 function pmWrapTunnel(entity) {
   if (Math.round(entity.row) !== PM_TUNNEL_ROW) return;
   if (entity.col < -0.5) entity.col = PM_COLS - 0.5;
   else if (entity.col > PM_COLS - 0.5) entity.col = -0.5;
-}
-
-function pmCursorSnapToPacman() {
-  const aheadRow = pmPac.row + pmPac.dir.dr;
-  const aheadCol = pmPac.col + pmPac.dir.dc;
-  const inFront = !pmIsWall(aheadRow, aheadCol)
-    ? { row: aheadRow, col: aheadCol }
-    : { row: Math.round(pmPac.row), col: Math.round(pmPac.col) };
-  pmCursorRow = inFront.row;
-  pmCursorCol = inFront.col;
 }
 
 function pmResetPositions() {
@@ -1000,7 +962,7 @@ function pmResetPositions() {
   pmStarted = false; // ghosts stay still until Pac-Man's first real move
   pmPowerUntil = 0;
   pmQueuedDir = null;
-  pmCursorSnapToPacman();
+  pmZoneCandidate = null;
 }
 
 function pmInit() {
@@ -1051,50 +1013,32 @@ function drawPacmanScene(now, dt) {
 
   const caught = now < pmCaughtUntil;
 
-  // The cursor is a persistent point that's smoothly "pulled" toward the
-  // hand (confined to the board/open trails) rather than snapping straight
-  // to the nearest open cell every frame - that instant re-snap was what
-  // caused it to visibly jump between parallel corridors. If the hand drops
-  // out, the cursor just freezes in place; when it comes back, the cursor
-  // re-anchors right in front of Pac-Man for a clean, predictable restart.
+  // Big-zone steering: which quarter of the board (relative to its fixed
+  // center) the hand is in, requiring it to hold that zone for
+  // PM_ZONE_SUSTAIN_SECONDS before it's accepted. Zones are huge and the
+  // reference point never moves, so ordinary camera noise can't flip the
+  // result the way a precise cursor/nearest-cell search could.
   if (hand) {
-    if (!pmHandWasPresent) pmCursorSnapToPacman();
-    pmHandWasPresent = true;
-
-    const rawRow = (hand.y - offY) / tile;
-    const rawCol = (hand.x - offX) / tile;
-    const target = pmNearestOpenCell(rawRow, rawCol);
-
-    const pdr = target.row - pmCursorRow;
-    const pdc = target.col - pmCursorCol;
-    const pdist = Math.hypot(pdr, pdc);
-    if (pdist > 1e-4) {
-      const step = Math.min(1, (PM_CURSOR_PULL_SPEED * dt) / pdist);
-      pmCursorRow += pdr * step;
-      pmCursorCol += pdc * step;
-    }
-  } else {
-    pmHandWasPresent = false;
-  }
-
-  if (pmCursorRow !== null) {
-    pmCursorPxX = offX + (pmCursorCol + 0.5) * tile;
-    pmCursorPxY = offY + (pmCursorRow + 0.5) * tile;
-
-    // Update the queued direction like a classic key-buffer: it only changes
-    // on a clear signal (past the deadzone) and otherwise just persists,
-    // so a single stale/noisy sample right at an intersection can't
-    // silently cancel an already-intended turn.
-    const dr = pmCursorRow - pmPac.row;
-    const dc = pmCursorCol - pmPac.col;
-    if (Math.hypot(dr, dc) > PM_QUEUE_DEADZONE) {
-      pmQueuedDir = Math.abs(dc) > Math.abs(dr)
+    const centerRow = (PM_ROWS - 1) / 2;
+    const centerCol = (PM_COLS - 1) / 2;
+    const handRow = (hand.y - offY) / tile;
+    const handCol = (hand.x - offX) / tile;
+    const dr = handRow - centerRow;
+    const dc = handCol - centerCol;
+    const dist = Math.hypot(dr, dc);
+    const deadzone = Math.max(PM_ROWS, PM_COLS) / 2 * PM_ZONE_DEADZONE_FRAC;
+    if (dist > deadzone) {
+      const candidate = Math.abs(dc) > Math.abs(dr)
         ? { dr: 0, dc: dc > 0 ? 1 : -1 }
         : { dr: dr > 0 ? 1 : -1, dc: 0 };
+      if (!pmZoneCandidate || candidate.dr !== pmZoneCandidate.dr || candidate.dc !== pmZoneCandidate.dc) {
+        pmZoneCandidate = candidate;
+        pmZoneCandidateSince = now;
+      }
+      if (now - pmZoneCandidateSince > PM_ZONE_SUSTAIN_SECONDS) {
+        pmQueuedDir = pmZoneCandidate;
+      }
     }
-  } else {
-    pmCursorPxX = null;
-    pmCursorPxY = null;
   }
 
   if (!caught) {
@@ -1240,6 +1184,39 @@ function drawPacmanScene(now, dt) {
     ctx.lineTo(0, 0);
     ctx.closePath();
     ctx.fill();
+    ctx.restore();
+  }
+
+  // Zone overlay: shows the four steering regions (diagonals from the
+  // board's center) and highlights whichever one is currently accepted,
+  // so the hand-to-direction mapping is directly visible on screen.
+  {
+    const centerX = offX + (tile * PM_COLS) / 2;
+    const centerY = offY + (tile * PM_ROWS) / 2;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(centerX, centerY); ctx.lineTo(0, 0);
+    ctx.moveTo(centerX, centerY); ctx.lineTo(W, 0);
+    ctx.moveTo(centerX, centerY); ctx.lineTo(0, H);
+    ctx.moveTo(centerX, centerY); ctx.lineTo(W, H);
+    ctx.stroke();
+
+    if (pmQueuedDir) {
+      let p1, p2;
+      if (pmQueuedDir.dc === 1) { p1 = [W, 0]; p2 = [W, H]; }
+      else if (pmQueuedDir.dc === -1) { p1 = [0, 0]; p2 = [0, H]; }
+      else if (pmQueuedDir.dr === 1) { p1 = [0, H]; p2 = [W, H]; }
+      else { p1 = [0, 0]; p2 = [W, 0]; }
+      ctx.fillStyle = 'rgba(57,255,157,0.14)';
+      ctx.beginPath();
+      ctx.moveTo(centerX, centerY);
+      ctx.lineTo(p1[0], p1[1]);
+      ctx.lineTo(p2[0], p2[1]);
+      ctx.closePath();
+      ctx.fill();
+    }
     ctx.restore();
   }
 
