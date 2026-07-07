@@ -804,7 +804,7 @@ async function pushPmState() {
     await fetch('/api/pmstate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ score: pmScore, lives: pmLives }),
+      body: JSON.stringify({ score: pmScore, lives: pmLives, level: pmLevel }),
     });
   } catch (e) { /* display keeps running even if the relay is down */ }
 }
@@ -982,7 +982,9 @@ let pmCaughtUntil = 0;
 let pmStarted = false;
 let pmScore = 0;
 let pmLives = 3;
+let pmLevel = 1;
 let pmGameOverUntil = 0;
+let pmBoardClearedUntil = 0; // brief "Board Cleared!" pause before the next board loads
 let pmInitialized = false;
 
 function pmBuildMaze() {
@@ -1124,13 +1126,20 @@ function pmResetPositions() {
 function pmFullReset() {
   pmScore = 0;
   pmLives = 3;
+  pmLevel = 1;
   pmResetDots();
   pmResetPositions();
   pmCaughtUntil = 0;
   pmGameOverUntil = 0;
+  pmBoardClearedUntil = 0;
   pmHandSeen = false; // wait for a hand again before the fresh game starts
   pmCursorPx = null;
   pmLastHeading = { dr: 0, dc: -1 };
+}
+
+// Ghosts speed up each level, but never enough to out-run Pac-Man.
+function pmGhostSpeed() {
+  return Math.min(PM_GHOST_SPEED + (pmLevel - 1) * 0.2, PM_SPEED - 0.3);
 }
 
 function pmInit() {
@@ -1167,7 +1176,8 @@ function pmMoveGhost(g, dt, frightened) {
   } else if (!atCenter) {
     g.lastDecisionCell = null; // clear once clearly away from center, ready for the next intersection
   }
-  const speed = frightened ? PM_GHOST_SPEED * 0.6 : PM_GHOST_SPEED;
+  const base = pmGhostSpeed();
+  const speed = frightened ? base * 0.6 : base;
   g.row += g.dir.dr * speed * dt;
   g.col += g.dir.dc * speed * dt;
   pmWrapTunnel(g);
@@ -1192,6 +1202,14 @@ function drawPacmanScene(now, dt) {
   const gameOver = now < pmGameOverUntil;
   if (pmGameOverUntil && !gameOver) {
     pmFullReset(); // game-over display finished - start a fresh game so it loops unattended
+  }
+
+  const boardCleared = now < pmBoardClearedUntil;
+  if (pmBoardClearedUntil && !boardCleared) {
+    // "Board Cleared!" pause finished - load the next board.
+    pmResetDots();
+    pmResetPositions();
+    pmBoardClearedUntil = 0;
   }
 
   // A mobile controller (if one is active) drives Pac-Man with arrows and
@@ -1258,7 +1276,7 @@ function drawPacmanScene(now, dt) {
   }
 
   const ready = controllerMode ? true : pmHandSeen;
-  if (!caught && !gameOver && ready) {
+  if (!caught && !gameOver && !boardCleared && ready) {
    if (controllerMode) {
     // --- Classic arrow control (mobile controller) ----------------------
     // Buffered turn: adopt the pressed arrow at the next cell centre if it's
@@ -1331,7 +1349,13 @@ function drawPacmanScene(now, dt) {
     const key = `${Math.round(pmPac.row)},${Math.round(pmPac.col)}`;
     if (pmDots.has(key)) { pmDots.delete(key); pmScore++; }
     if (pmPowerDots.has(key)) { pmPowerDots.delete(key); pmPowerUntil = now + PM_POWER_DURATION; pmScore += 10; }
-    if (pmDots.size === 0 && pmPowerDots.size === 0) { pmResetDots(); }
+    if (pmDots.size === 0 && pmPowerDots.size === 0) {
+      // Board cleared! Bump the level and pause briefly before the next board.
+      pmLevel += 1;
+      pmScore += 100; // clear bonus
+      pmPowerUntil = 0;
+      pmBoardClearedUntil = now + 2.5;
+    }
 
     if (pmStarted) {
       const frightened = now < pmPowerUntil;
@@ -1456,6 +1480,8 @@ function drawPacmanScene(now, dt) {
   ctx.fillStyle = '#fff';
   ctx.font = `${Math.round(tile * 0.5)}px sans-serif`;
   ctx.fillText(`Score: ${pmScore}`, offX, offY - tile * 0.25);
+  ctx.textAlign = 'center';
+  ctx.fillText(`Level ${pmLevel}`, offX + tile * PM_COLS / 2, offY - tile * 0.25);
   ctx.textAlign = 'right';
   ctx.fillText(`Lives: ${Math.max(pmLives, 0)}`, offX + tile * PM_COLS, offY - tile * 0.25);
   ctx.textAlign = 'left';
@@ -1467,6 +1493,14 @@ function drawPacmanScene(now, dt) {
     ctx.fillText('GAME OVER', W / 2, H / 2 - tile * 0.5);
     ctx.font = `${Math.round(tile * 0.5)}px sans-serif`;
     ctx.fillText(`Final Score: ${pmScore}`, W / 2, H / 2 + tile * 0.3);
+    ctx.textAlign = 'left';
+  } else if (boardCleared) {
+    ctx.fillStyle = `rgba(90,255,150,${0.7 + 0.3 * Math.abs(Math.sin(now * 6))})`;
+    ctx.font = `${Math.round(tile * 0.8)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('Board Cleared!', W / 2, H / 2 - tile * 0.5);
+    ctx.font = `${Math.round(tile * 0.5)}px sans-serif`;
+    ctx.fillText(`Level ${pmLevel}`, W / 2, H / 2 + tile * 0.3);
     ctx.textAlign = 'left';
   } else if (controllerMode && !pmStarted) {
     ctx.fillStyle = `rgba(255,255,255,${0.6 + 0.35 * Math.abs(Math.sin(now * 2.5))})`;

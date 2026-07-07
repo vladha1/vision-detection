@@ -7,6 +7,7 @@ const buttons = document.querySelectorAll('.dpad button');
 const dpadEl = document.querySelector('.dpad');
 const scoreboardEl = document.querySelector('.scoreboard');
 const scoreEl = document.getElementById('score');
+const levelEl = document.getElementById('level');
 const livesEl = document.getElementById('lives');
 const statusEl = document.getElementById('status');
 const modeToggle = document.getElementById('modeToggle');
@@ -94,6 +95,7 @@ async function poll() {
       (await fetch('/api/control')).json(),
     ]);
     scoreEl.textContent = s.score;
+    levelEl.textContent = s.level;
     livesEl.textContent = Math.max(0, s.lives);
     if (c.mode !== mode) { mode = c.mode; renderMode(); } // reflect admin-side changes
     setOnline(true);

@@ -100,7 +100,7 @@ scene_lock = threading.Lock()
 CONTROL_DIRS = ("up", "down", "left", "right")
 INPUT_MODES = ("hand", "controller")
 pm_control = {"dir": None, "reset": 0}  # "reset" is a counter the display watches to restart
-pm_state = {"score": 0, "lives": 3}
+pm_state = {"score": 0, "lives": 3, "level": 1}
 # Default to the phone controller so nothing moves until someone presses an
 # arrow. Hand-gesture play only kicks in when explicitly switched to "hand".
 input_state = {"mode": "controller"}
@@ -227,6 +227,8 @@ def api_pmstate_set():
             pm_state["score"] = data["score"]
         if isinstance(data.get("lives"), int):
             pm_state["lives"] = data["lives"]
+        if isinstance(data.get("level"), int):
+            pm_state["level"] = data["level"]
     return jsonify({"ok": True})
 
 
