@@ -936,8 +936,8 @@ const PM_RAW_MAP = [
 
 const PM_COLS = 19;
 const PM_ROWS = PM_RAW_MAP.length;
-const PM_SPEED = 1.9; // cells/sec - deliberately slow top speed so it's easy to place and follow
-const PM_GHOST_SPEED = 1.5; // kept ~the same ratio to Pac-Man so difficulty is unchanged
+const PM_SPEED = 2.4; // cells/sec - a bit quicker than the ghosts so it's easier to escape
+const PM_GHOST_SPEED = 1.5; // kept slower than Pac-Man to make the game more forgiving
 // Error-adaptive cursor smoothing: the cursor eases toward the hand with a
 // time constant that STRETCHES when the hand is near it (steady, accurate,
 // jitter-proof fine control) and SHRINKS when the hand makes a big deliberate
