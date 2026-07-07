@@ -793,10 +793,6 @@ let handMarkerHeading = 0;
 let handMarkerLastPos = null;
 
 function drawHandMarker(now) {
-  // Pac-Man already shows the direction arrow tied to its own position -
-  // a separate free-floating hand dot would be redundant/confusing there.
-  if (currentScene === 'pacman') return;
-
   if (!hand) {
     handMarkerLastPos = null;
     return;
@@ -900,13 +896,13 @@ const PM_ROWS = PM_RAW_MAP.length;
 const PM_SPEED = 3.0; // cells/sec - slower than before so there's a real reaction window
 const PM_GHOST_SPEED = 2.4;
 const PM_TURN_TOLERANCE = 0.32; // how close to a cell center counts as "at an intersection" - wide enough that the ~100ms hand-tracking update interval reliably lands inside it
-// Steering: a swipe/gesture (delta between hand samples, past a threshold)
-// sets the queued direction, shown as an arrow right in front of Pac-Man
-// itself - no separate cursor or on-screen zone to interpret, just "this
-// arrow is what happens next."
-const PM_SWIPE_FRAC = 0.55; // fraction of a tile the hand must move to register as a swipe - was 0.4, triggering too easily on incidental motion
-const PM_SWIPE_COOLDOWN_SECONDS = 0.5; // after a swipe, time to let the hand settle before a new one can register
-const PM_SWIPE_VERTICAL_GAIN = 1.5; // up/down has a smaller natural range of motion against a wall than side-to-side, so weight it higher when picking which axis a swipe was along
+// Steering: a free cursor follows the raw hand position (no confinement, no
+// gesture detection), and Pac-Man autonomously paths toward it - shortest
+// route via BFS, recalculated at every intersection - rather than the
+// player needing to time individual turns. This sidesteps the timing/noise
+// problems that direction-gesture-based control kept running into: the
+// exact cursor position barely matters since it just picks a rough
+// destination, not a precise instant-by-instant direction.
 const PM_TUNNEL_ROW = 10; // left/right wraparound passage, classic Pac-Man style
 const PM_POWER_DURATION = 7;
 const PM_POWER_COLOR = '#2233dd';
@@ -919,9 +915,8 @@ let pmPowerDots = null;
 let pmPowerUntil = 0;
 let pmPac = null;
 let pmGhosts = null;
-let pmQueuedDir = null; // persists across frames like a classic key-buffer, instead of being recomputed fresh every frame
-let pmSwipeLastPos = null; // last hand sample used for swipe/delta detection
-let pmSwipeCooldownUntil = 0;
+let pmTargetRow = null; // nearest open cell to the raw cursor position - persists across hand dropouts
+let pmTargetCol = null;
 let pmCaughtUntil = 0;
 let pmStarted = false;
 let pmScore = 0;
@@ -956,6 +951,82 @@ function pmWrapTunnel(entity) {
   else if (entity.col > PM_COLS - 0.5) entity.col = -0.5;
 }
 
+// Confines a raw (row, col) to the maze bounds and, if it lands on a wall,
+// to the nearest open cell - so the cursor always maps to somewhere
+// Pac-Man could plausibly path to.
+function pmNearestOpenCell(row, col) {
+  const r0 = Math.max(0, Math.min(PM_ROWS - 1, Math.round(row)));
+  const c0 = Math.max(0, Math.min(PM_COLS - 1, Math.round(col)));
+  if (!pmIsWall(r0, c0)) return { row: r0, col: c0 };
+  const maxRadius = Math.max(PM_ROWS, PM_COLS);
+  for (let radius = 1; radius <= maxRadius; radius++) {
+    for (let dr = -radius; dr <= radius; dr++) {
+      for (let dc = -radius; dc <= radius; dc++) {
+        if (Math.max(Math.abs(dr), Math.abs(dc)) !== radius) continue;
+        const rr = r0 + dr, cc = c0 + dc;
+        if (rr < 0 || rr >= PM_ROWS || cc < 0 || cc >= PM_COLS) continue;
+        if (!pmIsWall(rr, cc)) return { row: rr, col: cc };
+      }
+    }
+  }
+  return { row: r0, col: c0 };
+}
+
+// BFS distance-to-target for every reachable cell, computed once per frame
+// from the target outward, so looking up any cell's distance afterward is
+// instant - cheap enough to redo every frame for a board this size.
+function pmBFSDistances(targetRow, targetCol) {
+  const dist = Array.from({ length: PM_ROWS }, () => new Array(PM_COLS).fill(Infinity));
+  if (pmIsWall(targetRow, targetCol)) return dist;
+  dist[targetRow][targetCol] = 0;
+  const queue = [[targetRow, targetCol]];
+  let qi = 0;
+  while (qi < queue.length) {
+    const [r, c] = queue[qi++];
+    const d = dist[r][c];
+    const neighbors = [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]];
+    if (r === PM_TUNNEL_ROW) {
+      if (c === 0) neighbors.push([r, PM_COLS - 1]);
+      if (c === PM_COLS - 1) neighbors.push([r, 0]);
+    }
+    for (const [nr, nc] of neighbors) {
+      if (nr < 0 || nr >= PM_ROWS || nc < 0 || nc >= PM_COLS) continue;
+      if (pmIsWall(nr, nc)) continue;
+      if (dist[nr][nc] > d + 1) {
+        dist[nr][nc] = d + 1;
+        queue.push([nr, nc]);
+      }
+    }
+  }
+  return dist;
+}
+
+// Picks the best next step from (r,c) toward whatever dist[][] measures
+// distance-to-target from - prefers a real turn over reversing (only
+// reverses if that's the only option), and among equally-good options,
+// prefers continuing in the current direction to avoid needless zigzag.
+function pmBestStepToward(r, c, currentDir, dist) {
+  const reverseDir = { dr: -currentDir.dr, dc: -currentDir.dc };
+  const options = [{ dr: -1, dc: 0 }, { dr: 1, dc: 0 }, { dr: 0, dc: -1 }, { dr: 0, dc: 1 }]
+    .filter(d => !pmIsWall(r + d.dr, c + d.dc))
+    .map(d => {
+      let nc = c + d.dc;
+      if (nc < 0) nc = PM_COLS - 1;
+      else if (nc >= PM_COLS) nc = 0;
+      const nr = r + d.dr;
+      return { dr: d.dr, dc: d.dc, dist: dist ? dist[nr][nc] : 0 };
+    });
+  if (!options.length) return currentDir;
+  const finite = options.filter(o => o.dist < Infinity);
+  const pool = finite.length ? finite : options;
+  const nonReverse = pool.filter(o => !(o.dr === reverseDir.dr && o.dc === reverseDir.dc));
+  const candidates = nonReverse.length ? nonReverse : pool;
+  const bestDist = Math.min(...candidates.map(o => o.dist));
+  const tied = candidates.filter(o => o.dist === bestDist);
+  const keepCurrent = tied.find(o => o.dr === currentDir.dr && o.dc === currentDir.dc);
+  return keepCurrent || tied[0];
+}
+
 function pmResetPositions() {
   pmPac = { row: 12, col: 9, dir: { dr: 0, dc: 0 } }; // the "door" cell just below the ghost house
   pmGhosts = PM_GHOST_COLORS.map((color, i) => {
@@ -964,9 +1035,6 @@ function pmResetPositions() {
   });
   pmStarted = false; // ghosts stay still until Pac-Man's first real move
   pmPowerUntil = 0;
-  pmQueuedDir = null;
-  pmSwipeLastPos = null;
-  pmSwipeCooldownUntil = 0;
 }
 
 function pmInit() {
@@ -1017,45 +1085,31 @@ function drawPacmanScene(now, dt) {
 
   const caught = now < pmCaughtUntil;
 
-  // Swipe/gesture steering: a clear movement of the hand (past a threshold)
-  // sets the queued direction. No cursor to track or zone to interpret -
-  // just gesture, then watch the arrow in front of Pac-Man update. After a
-  // swipe registers, there's a brief cooldown where the baseline keeps
-  // refreshing to the current hand position instead of measuring distance,
-  // so settling/relaxing the hand afterward can't itself count as a swipe.
+  // Free cursor: just the raw hand position, confined only enough to map to
+  // a real board cell. Persists (keeps its last value) while the hand is
+  // untracked, same as before.
   if (hand) {
-    if (now < pmSwipeCooldownUntil || !pmSwipeLastPos) {
-      pmSwipeLastPos = { x: hand.x, y: hand.y };
-    } else {
-      const dx = hand.x - pmSwipeLastPos.x;
-      const dy = hand.y - pmSwipeLastPos.y;
-      const dist = Math.hypot(dx, dy); // raw distance decides whether a swipe happened at all
-      if (dist > tile * PM_SWIPE_FRAC) {
-        // weighted comparison decides which axis it was along - vertical
-        // gets a boost since it has less room to move against a wall
-        pmQueuedDir = Math.abs(dx) > Math.abs(dy) * PM_SWIPE_VERTICAL_GAIN
-          ? { dr: 0, dc: dx > 0 ? 1 : -1 }
-          : { dr: dy > 0 ? 1 : -1, dc: 0 };
-        pmSwipeLastPos = { x: hand.x, y: hand.y };
-        pmSwipeCooldownUntil = now + PM_SWIPE_COOLDOWN_SECONDS;
-      }
-    }
-  } else {
-    pmSwipeLastPos = null;
+    const rawRow = (hand.y - offY) / tile;
+    const rawCol = (hand.x - offX) / tile;
+    const t = pmNearestOpenCell(rawRow, rawCol);
+    pmTargetRow = t.row;
+    pmTargetCol = t.col;
   }
+  const pmDist = pmTargetRow !== null ? pmBFSDistances(pmTargetRow, pmTargetCol) : null;
 
   if (!caught) {
     // Wide intersection window (not a narrow instant) so it reliably
     // overlaps with the hand tracker's ~100ms update interval.
     const atRow = Math.abs(pmPac.row - Math.round(pmPac.row)) < PM_TURN_TOLERANCE;
     const atCol = Math.abs(pmPac.col - Math.round(pmPac.col)) < PM_TURN_TOLERANCE;
-    if (pmQueuedDir && atRow && atCol) {
+    if (atRow && atCol && pmDist) {
       const r = Math.round(pmPac.row), c = Math.round(pmPac.col);
-      const changing = pmQueuedDir.dr !== pmPac.dir.dr || pmQueuedDir.dc !== pmPac.dir.dc;
-      if (changing && !pmIsWall(r + pmQueuedDir.dr, c + pmQueuedDir.dc)) {
-        pmPac.dir = pmQueuedDir;
+      const step = pmBestStepToward(r, c, pmPac.dir, pmDist);
+      const changing = step.dr !== pmPac.dir.dr || step.dc !== pmPac.dir.dc;
+      if (changing && !pmIsWall(r + step.dr, c + step.dc)) {
+        pmPac.dir = step;
         pmPac.row = r; pmPac.col = c;
-        pmStarted = true;
+        pmStarted = true; // only counts as "started" once actually being directed somewhere
       }
     }
     if (pmPac.dir.dr || pmPac.dir.dc) {
@@ -1065,22 +1119,10 @@ function drawPacmanScene(now, dt) {
         pmPac.row += pmPac.dir.dr * PM_SPEED * dt;
         pmPac.col += pmPac.dir.dc * PM_SPEED * dt;
       } else {
-        // hit a wall - auto-turn onto whatever's open instead of stopping
-        // dead. Only the very first move (pmStarted still false) requires
-        // explicit hand input.
+        // hit a wall - auto-turn onto whatever's open instead of stopping dead
         pmPac.row = Math.round(pmPac.row);
         pmPac.col = Math.round(pmPac.col);
-        const r = pmPac.row, c = pmPac.col;
-        const reverseDir = { dr: -pmPac.dir.dr, dc: -pmPac.dir.dc };
-        const options = [{ dr: -1, dc: 0 }, { dr: 1, dc: 0 }, { dr: 0, dc: -1 }, { dr: 0, dc: 1 }]
-          .filter(d => !pmIsWall(r + d.dr, c + d.dc));
-        // prefer any real turn over reversing - only reverse if that's the
-        // only option left (a genuine dead end)
-        const nonReverse = options.filter(d => !(d.dr === reverseDir.dr && d.dc === reverseDir.dc));
-        const preferred = pmQueuedDir && options.find(o => o.dr === pmQueuedDir.dr && o.dc === pmQueuedDir.dc);
-        if (preferred) pmPac.dir = preferred;
-        else if (nonReverse.length) pmPac.dir = nonReverse[Math.floor(Math.random() * nonReverse.length)];
-        else if (options.length) pmPac.dir = options[0];
+        pmPac.dir = pmBestStepToward(pmPac.row, pmPac.col, pmPac.dir, pmDist);
       }
       pmWrapTunnel(pmPac);
     }
@@ -1190,27 +1232,15 @@ function drawPacmanScene(now, dt) {
     ctx.restore();
   }
 
-  // Arrow indicator right in front of Pac-Man showing the currently queued
-  // direction - directly tied to Pac-Man's own position, not a separate
-  // cursor or on-screen zone to interpret.
-  if (pmQueuedDir) {
-    const p = toPx(pmPac.row, pmPac.col);
-    const cx = p.x + tile / 2, cy = p.y + tile / 2;
-    const angle = Math.atan2(pmQueuedDir.dr, pmQueuedDir.dc);
-    const dist = tile * 1.3;
+  // Highlight the target cell (where the free cursor currently maps to on
+  // the board) so it's clear where Pac-Man is currently pathing toward.
+  if (pmTargetRow !== null) {
+    const p = toPx(pmTargetRow, pmTargetCol);
     ctx.save();
-    ctx.translate(cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist);
-    ctx.rotate(angle);
-    ctx.fillStyle = '#39ff9d';
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(tile * 0.35, 0);
-    ctx.lineTo(-tile * 0.2, -tile * 0.22);
-    ctx.lineTo(-tile * 0.2, tile * 0.22);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+    ctx.globalAlpha = 0.5 + 0.3 * Math.abs(Math.sin(now * 4));
+    ctx.strokeStyle = '#39ff9d';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(p.x + 3, p.y + 3, tile - 6, tile - 6);
     ctx.restore();
   }
 
