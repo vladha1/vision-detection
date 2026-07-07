@@ -901,8 +901,15 @@ const PM_RAW_MAP = [
 
 const PM_COLS = 19;
 const PM_ROWS = PM_RAW_MAP.length;
-const PM_SPEED = 3.0; // cells/sec - slower than before so there's a real reaction window
-const PM_GHOST_SPEED = 2.4;
+const PM_SPEED = 2.6; // cells/sec - calmer tempo so it's easier to place and doesn't dart away
+const PM_GHOST_SPEED = 2.1; // kept ~the same ratio to Pac-Man so difficulty is unchanged
+// Error-adaptive cursor smoothing: the cursor eases toward the hand with a
+// time constant that STRETCHES when the hand is near it (steady, accurate,
+// jitter-proof fine control) and SHRINKS when the hand makes a big deliberate
+// move (snappy, responsive) - so it's slow by default yet quick when needed.
+const PM_CURSOR_TAU_SLOW = 0.38; // s: heavy smoothing when the hand sits near the cursor
+const PM_CURSOR_TAU_FAST = 0.07; // s: light smoothing when the hand is far from the cursor
+const PM_CURSOR_SNAP_TILES = 5;  // hand-to-cursor error (tiles) at which smoothing is fully fast
 const PM_TURN_TOLERANCE = 0.32; // how close to a cell center counts as "at an intersection" - wide enough that the ~100ms hand-tracking update interval reliably lands inside it
 // Steering: a free cursor follows the raw hand position (no confinement, no
 // gesture detection), and Pac-Man autonomously paths toward it - shortest
@@ -1155,11 +1162,13 @@ function drawPacmanScene(now, dt) {
   if (pmPac.dir.dr || pmPac.dir.dc) pmLastHeading = pmPac.dir;
 
   let goalPx = null;
+  let adaptive = false;
   if (hand) {
     goalPx = {
       x: Math.max(offX, Math.min(offX + tile * PM_COLS, hand.x)),
       y: Math.max(offY, Math.min(offY + tile * PM_ROWS, hand.y)),
     };
+    adaptive = true; // hand steering uses error-adaptive smoothing
   } else if (pmHandSeen) {
     const dir = (pmPac.dir.dr || pmPac.dir.dc) ? pmPac.dir : pmLastHeading;
     const lead = pmLeadCell(pmPac.row, pmPac.col, dir, 3);
@@ -1170,7 +1179,18 @@ function drawPacmanScene(now, dt) {
     if (!pmCursorPx) {
       pmCursorPx = { x: goalPx.x, y: goalPx.y };
     } else {
-      const k = 1 - Math.exp(-dt / 0.12); // framerate-independent easing (~0.12s time constant)
+      let tau;
+      if (adaptive) {
+        // Stretch the time constant when the hand is near the cursor (fine,
+        // accurate) and shrink it when far (quick) - the error itself picks
+        // the speed, so jitter stays calm while big moves snap through.
+        const errTiles = Math.hypot(goalPx.x - pmCursorPx.x, goalPx.y - pmCursorPx.y) / tile;
+        const f = Math.min(1, errTiles / PM_CURSOR_SNAP_TILES);
+        tau = PM_CURSOR_TAU_SLOW - (PM_CURSOR_TAU_SLOW - PM_CURSOR_TAU_FAST) * f;
+      } else {
+        tau = 0.18; // no-hand lead point moves cell-to-cell; steady easing is fine
+      }
+      const k = 1 - Math.exp(-dt / tau); // framerate-independent easing
       pmCursorPx.x += (goalPx.x - pmCursorPx.x) * k;
       pmCursorPx.y += (goalPx.y - pmCursorPx.y) * k;
     }
