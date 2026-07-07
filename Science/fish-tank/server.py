@@ -101,7 +101,9 @@ CONTROL_DIRS = ("up", "down", "left", "right")
 INPUT_MODES = ("hand", "controller")
 pm_control = {"dir": None, "reset": 0}  # "reset" is a counter the display watches to restart
 pm_state = {"score": 0, "lives": 3}
-input_state = {"mode": "hand"}
+# Default to the phone controller so nothing moves until someone presses an
+# arrow. Hand-gesture play only kicks in when explicitly switched to "hand".
+input_state = {"mode": "controller"}
 control_lock = threading.Lock()
 
 

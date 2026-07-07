@@ -16,7 +16,7 @@ let availableScenes = [];
 let activeScene = null;
 
 const INPUT_MODES = [['hand', 'Hand tracking'], ['controller', 'Phone controller']];
-let activeInputMode = 'hand';
+let activeInputMode = 'controller';
 
 async function loadScenes() {
   const [scenesRes, currentRes] = await Promise.all([fetch('/api/scenes'), fetch('/api/scene')]);

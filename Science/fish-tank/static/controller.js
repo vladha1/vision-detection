@@ -13,7 +13,7 @@ const modeToggle = document.getElementById('modeToggle');
 
 let currentDir = null;
 let online = false;
-let mode = 'hand';
+let mode = 'controller'; // server default; corrected by the first poll
 
 function renderMode() {
   const active = mode === 'controller';
