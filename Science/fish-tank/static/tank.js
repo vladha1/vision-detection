@@ -768,6 +768,41 @@ async function syncScene() {
 syncScene();
 setInterval(syncScene, 2000);
 
+// --- mobile controller relay: a phone posts arrow presses to /api/control
+// and reads the live score from /api/pmstate. While a controller is active
+// the display drives Pac-Man from those arrows and ignores the hand (the
+// server also stops reporting a hand for the Pac-Man scene). ---
+const PM_ARROW_VECTORS = {
+  up: { dr: -1, dc: 0 }, down: { dr: 1, dc: 0 },
+  left: { dr: 0, dc: -1 }, right: { dr: 0, dc: 1 },
+};
+let pmControllerActive = false;
+let pmArrowDir = null;
+async function syncControl() {
+  try {
+    const d = await (await fetch('/api/control')).json();
+    pmControllerActive = !!d.active;
+    pmArrowDir = (d.active && d.dir && PM_ARROW_VECTORS[d.dir]) ? PM_ARROW_VECTORS[d.dir] : null;
+  } catch (e) {
+    pmControllerActive = false;
+    pmArrowDir = null;
+  }
+}
+syncControl();
+setInterval(syncControl, 100);
+
+async function pushPmState() {
+  if (currentScene !== 'pacman') return;
+  try {
+    await fetch('/api/pmstate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ score: pmScore, lives: pmLives }),
+    });
+  } catch (e) { /* display keeps running even if the relay is down */ }
+}
+setInterval(pushPmState, 500);
+
 // --- always-on hand marker: shows where the tracked hand is, styled to
 // match whichever scene is active (a small fish, or a small flower).
 const HAND_MARKER_COLOR = '#ffffff';
@@ -1152,59 +1187,101 @@ function drawPacmanScene(now, dt) {
     pmFullReset(); // game-over display finished - start a fresh game so it loops unattended
   }
 
-  // --- Smoothed cursor & target -----------------------------------------
+  // A mobile controller (if one is active) drives Pac-Man with arrows and
+  // suppresses the hand cursor entirely.
+  const controllerMode = pmControllerActive;
+
+  // --- Smoothed cursor & target (hand mode only) ------------------------
   // The cursor is a persistent pixel position that eases toward a goal every
   // frame, so it never snaps abruptly (and it filters the raw ~10Hz hand
   // jitter). With a hand it eases toward the hand; with no hand it eases
   // toward a point a few cells AHEAD of Pac-Man, so the default cursor leads
-  // him rather than freezing behind. All motion waits for a first hand.
-  if (hand) pmHandSeen = true;
-  if (pmPac.dir.dr || pmPac.dir.dc) pmLastHeading = pmPac.dir;
-
-  let goalPx = null;
-  let adaptive = false;
-  if (hand) {
-    goalPx = {
-      x: Math.max(offX, Math.min(offX + tile * PM_COLS, hand.x)),
-      y: Math.max(offY, Math.min(offY + tile * PM_ROWS, hand.y)),
-    };
-    adaptive = true; // hand steering uses error-adaptive smoothing
-  } else if (pmHandSeen) {
-    const dir = (pmPac.dir.dr || pmPac.dir.dc) ? pmPac.dir : pmLastHeading;
-    const lead = pmLeadCell(pmPac.row, pmPac.col, dir, 3);
-    goalPx = { x: offX + (lead.col + 0.5) * tile, y: offY + (lead.row + 0.5) * tile };
-  }
-
-  if (goalPx) {
-    if (!pmCursorPx) {
-      pmCursorPx = { x: goalPx.x, y: goalPx.y };
-    } else {
-      let tau;
-      if (adaptive) {
-        // Stretch the time constant when the hand is near the cursor (fine,
-        // accurate) and shrink it when far (quick) - the error itself picks
-        // the speed, so jitter stays calm while big moves snap through.
-        const errTiles = Math.hypot(goalPx.x - pmCursorPx.x, goalPx.y - pmCursorPx.y) / tile;
-        const f = Math.min(1, errTiles / PM_CURSOR_SNAP_TILES);
-        tau = PM_CURSOR_TAU_SLOW - (PM_CURSOR_TAU_SLOW - PM_CURSOR_TAU_FAST) * f;
-      } else {
-        tau = 0.18; // no-hand lead point moves cell-to-cell; steady easing is fine
-      }
-      const k = 1 - Math.exp(-dt / tau); // framerate-independent easing
-      pmCursorPx.x += (goalPx.x - pmCursorPx.x) * k;
-      pmCursorPx.y += (goalPx.y - pmCursorPx.y) * k;
-    }
-    const t = pmNearestOpenCell((pmCursorPx.y - offY) / tile, (pmCursorPx.x - offX) / tile);
-    pmTargetRow = t.row;
-    pmTargetCol = t.col;
-  } else {
+  // him rather than freezing behind. All hand motion waits for a first hand.
+  let pmDist = null;
+  if (controllerMode) {
     pmCursorPx = null;
     pmTargetRow = null;
     pmTargetCol = null;
-  }
-  const pmDist = pmTargetRow !== null ? pmBFSDistances(pmTargetRow, pmTargetCol) : null;
+  } else {
+    if (hand) pmHandSeen = true;
+    if (pmPac.dir.dr || pmPac.dir.dc) pmLastHeading = pmPac.dir;
 
-  if (!caught && !gameOver && pmHandSeen) {
+    let goalPx = null;
+    let adaptive = false;
+    if (hand) {
+      goalPx = {
+        x: Math.max(offX, Math.min(offX + tile * PM_COLS, hand.x)),
+        y: Math.max(offY, Math.min(offY + tile * PM_ROWS, hand.y)),
+      };
+      adaptive = true; // hand steering uses error-adaptive smoothing
+    } else if (pmHandSeen) {
+      const dir = (pmPac.dir.dr || pmPac.dir.dc) ? pmPac.dir : pmLastHeading;
+      const lead = pmLeadCell(pmPac.row, pmPac.col, dir, 3);
+      goalPx = { x: offX + (lead.col + 0.5) * tile, y: offY + (lead.row + 0.5) * tile };
+    }
+
+    if (goalPx) {
+      if (!pmCursorPx) {
+        pmCursorPx = { x: goalPx.x, y: goalPx.y };
+      } else {
+        let tau;
+        if (adaptive) {
+          // Stretch the time constant when the hand is near the cursor (fine,
+          // accurate) and shrink it when far (quick) - the error itself picks
+          // the speed, so jitter stays calm while big moves snap through.
+          const errTiles = Math.hypot(goalPx.x - pmCursorPx.x, goalPx.y - pmCursorPx.y) / tile;
+          const f = Math.min(1, errTiles / PM_CURSOR_SNAP_TILES);
+          tau = PM_CURSOR_TAU_SLOW - (PM_CURSOR_TAU_SLOW - PM_CURSOR_TAU_FAST) * f;
+        } else {
+          tau = 0.18; // no-hand lead point moves cell-to-cell; steady easing is fine
+        }
+        const k = 1 - Math.exp(-dt / tau); // framerate-independent easing
+        pmCursorPx.x += (goalPx.x - pmCursorPx.x) * k;
+        pmCursorPx.y += (goalPx.y - pmCursorPx.y) * k;
+      }
+      const t = pmNearestOpenCell((pmCursorPx.y - offY) / tile, (pmCursorPx.x - offX) / tile);
+      pmTargetRow = t.row;
+      pmTargetCol = t.col;
+    } else {
+      pmCursorPx = null;
+      pmTargetRow = null;
+      pmTargetCol = null;
+    }
+    pmDist = pmTargetRow !== null ? pmBFSDistances(pmTargetRow, pmTargetCol) : null;
+  }
+
+  const ready = controllerMode ? true : pmHandSeen;
+  if (!caught && !gameOver && ready) {
+   if (controllerMode) {
+    // --- Classic arrow control (mobile controller) ----------------------
+    // Buffered turn: adopt the pressed arrow at the next cell centre if it's
+    // open, otherwise keep the current heading; stop dead when it hits a wall.
+    const atR = Math.abs(pmPac.row - Math.round(pmPac.row)) < PM_TURN_TOLERANCE;
+    const atC = Math.abs(pmPac.col - Math.round(pmPac.col)) < PM_TURN_TOLERANCE;
+    if (atR && atC && pmArrowDir) {
+      const r = Math.round(pmPac.row), c = Math.round(pmPac.col);
+      if (!pmIsWall(r + pmArrowDir.dr, c + pmArrowDir.dc)) {
+        if (pmArrowDir.dr !== pmPac.dir.dr || pmArrowDir.dc !== pmPac.dir.dc) {
+          pmPac.row = r; pmPac.col = c;
+        }
+        pmPac.dir = pmArrowDir;
+        pmStarted = true;
+      }
+    }
+    if (pmPac.dir.dr || pmPac.dir.dc) {
+      const aheadRow = pmPac.row + pmPac.dir.dr * 0.55;
+      const aheadCol = pmPac.col + pmPac.dir.dc * 0.55;
+      if (!pmIsWall(aheadRow, aheadCol)) {
+        pmPac.row += pmPac.dir.dr * PM_SPEED * dt;
+        pmPac.col += pmPac.dir.dc * PM_SPEED * dt;
+      } else {
+        pmPac.row = Math.round(pmPac.row);
+        pmPac.col = Math.round(pmPac.col);
+        pmPac.dir = { dr: 0, dc: 0 };
+      }
+      pmWrapTunnel(pmPac);
+    }
+   } else {
     // Wide intersection window (not a narrow instant) so it reliably
     // overlaps with the hand tracker's ~100ms update interval.
     const atRow = Math.abs(pmPac.row - Math.round(pmPac.row)) < PM_TURN_TOLERANCE;
@@ -1242,6 +1319,7 @@ function drawPacmanScene(now, dt) {
       }
       pmWrapTunnel(pmPac);
     }
+   }
 
     const key = `${Math.round(pmPac.row)},${Math.round(pmPac.col)}`;
     if (pmDots.has(key)) { pmDots.delete(key); pmScore++; }
@@ -1380,7 +1458,13 @@ function drawPacmanScene(now, dt) {
     ctx.font = `${Math.round(tile * 0.5)}px sans-serif`;
     ctx.fillText(`Final Score: ${pmScore}`, W / 2, H / 2 + tile * 0.3);
     ctx.textAlign = 'left';
-  } else if (!pmHandSeen) {
+  } else if (controllerMode && !pmStarted) {
+    ctx.fillStyle = `rgba(255,255,255,${0.6 + 0.35 * Math.abs(Math.sin(now * 2.5))})`;
+    ctx.font = `${Math.round(tile * 0.7)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('Press an arrow to start', W / 2, H / 2);
+    ctx.textAlign = 'left';
+  } else if (!controllerMode && !pmHandSeen) {
     ctx.fillStyle = `rgba(255,255,255,${0.6 + 0.35 * Math.abs(Math.sin(now * 2.5))})`;
     ctx.font = `${Math.round(tile * 0.7)}px sans-serif`;
     ctx.textAlign = 'center';
