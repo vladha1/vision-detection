@@ -793,25 +793,30 @@ let handMarkerHeading = 0;
 let handMarkerLastPos = null;
 
 function drawHandMarker(now) {
-  if (!hand) {
+  // On the Pac-Man scene, a lost hand falls back to a marker anchored ahead
+  // of Pac-Man (see pmCursorPx) instead of just vanishing - other scenes
+  // still hide the marker outright when untracked.
+  const fallback = !hand && currentScene === 'pacman' ? pmCursorPx : null;
+  const source = hand || fallback;
+  if (!source) {
     handMarkerLastPos = null;
     return;
   }
   if (handMarkerLastPos) {
-    const dx = hand.x - handMarkerLastPos.x;
-    const dy = hand.y - handMarkerLastPos.y;
+    const dx = source.x - handMarkerLastPos.x;
+    const dy = source.y - handMarkerLastPos.y;
     if (Math.hypot(dx, dy) > 2) {
       handMarkerHeading = Math.atan2(dy, dx);
     }
   }
-  handMarkerLastPos = { x: hand.x, y: hand.y };
+  handMarkerLastPos = { x: source.x, y: source.y };
 
   const pulse = 1 + Math.sin(now * 3) * 0.12;
   // On the Pac-Man scene, keep the cursor within the board's actual pixel
   // rectangle instead of letting it drift into the letterboxed margins.
   const confine = currentScene === 'pacman' && pmBoardBounds;
-  const mx = confine ? Math.max(pmBoardBounds.left, Math.min(pmBoardBounds.right, hand.x)) : hand.x;
-  const my = confine ? Math.max(pmBoardBounds.top, Math.min(pmBoardBounds.bottom, hand.y)) : hand.y;
+  const mx = confine ? Math.max(pmBoardBounds.left, Math.min(pmBoardBounds.right, source.x)) : source.x;
+  const my = confine ? Math.max(pmBoardBounds.top, Math.min(pmBoardBounds.bottom, source.y)) : source.y;
 
   drawGlow(mx, my, 70 * pulse, 'rgba(255,255,180,0.4)');
   if (currentScene === 'flowers') {
@@ -920,6 +925,7 @@ let pmPac = null;
 let pmGhosts = null;
 let pmTargetRow = null; // nearest open cell to the raw cursor position - persists across hand dropouts
 let pmTargetCol = null;
+let pmCursorPx = null; // fallback marker position (ahead of Pac-Man) while the hand is untracked
 let pmBoardBounds = null; // board's pixel rectangle, for confining the cursor marker
 let pmCaughtUntil = 0;
 let pmStarted = false;
@@ -1120,14 +1126,23 @@ function drawPacmanScene(now, dt) {
   }
 
   // Free cursor: just the raw hand position, confined only enough to map to
-  // a real board cell. Persists (keeps its last value) while the hand is
-  // untracked, same as before.
+  // a real board cell. While the hand is untracked, rather than freezing at
+  // the last raw position (which stalls Pac-Man once he reaches it), keep
+  // projecting the target a few cells ahead along his current heading so he
+  // keeps walking - and re-anchor to the real hand the moment it's sensed.
   if (hand) {
     const rawRow = (hand.y - offY) / tile;
     const rawCol = (hand.x - offX) / tile;
     const t = pmNearestOpenCell(rawRow, rawCol);
     pmTargetRow = t.row;
     pmTargetCol = t.col;
+    pmCursorPx = null;
+  } else {
+    const dir = (pmPac.dir.dr || pmPac.dir.dc) ? pmPac.dir : { dr: 0, dc: -1 };
+    const t = pmNearestOpenCell(pmPac.row + dir.dr * 3, pmPac.col + dir.dc * 3);
+    pmTargetRow = t.row;
+    pmTargetCol = t.col;
+    pmCursorPx = { x: offX + (t.col + 0.5) * tile, y: offY + (t.row + 0.5) * tile };
   }
   const pmDist = pmTargetRow !== null ? pmBFSDistances(pmTargetRow, pmTargetCol) : null;
 
