@@ -901,6 +901,7 @@ const PM_TURN_TOLERANCE = 0.32; // how close to a cell center counts as "at an i
 // itself - no separate cursor or on-screen zone to interpret, just "this
 // arrow is what happens next."
 const PM_SWIPE_FRAC = 0.4; // fraction of a tile the hand must move to register as a swipe
+const PM_SWIPE_COOLDOWN_SECONDS = 0.5; // after a swipe, time to let the hand settle before a new one can register
 const PM_TUNNEL_ROW = 10; // left/right wraparound passage, classic Pac-Man style
 const PM_POWER_DURATION = 7;
 const PM_POWER_COLOR = '#2233dd';
@@ -915,6 +916,7 @@ let pmPac = null;
 let pmGhosts = null;
 let pmQueuedDir = null; // persists across frames like a classic key-buffer, instead of being recomputed fresh every frame
 let pmSwipeLastPos = null; // last hand sample used for swipe/delta detection
+let pmSwipeCooldownUntil = 0;
 let pmCaughtUntil = 0;
 let pmStarted = false;
 let pmScore = 0;
@@ -959,6 +961,7 @@ function pmResetPositions() {
   pmPowerUntil = 0;
   pmQueuedDir = null;
   pmSwipeLastPos = null;
+  pmSwipeCooldownUntil = 0;
 }
 
 function pmInit() {
@@ -1011,9 +1014,14 @@ function drawPacmanScene(now, dt) {
 
   // Swipe/gesture steering: a clear movement of the hand (past a threshold)
   // sets the queued direction. No cursor to track or zone to interpret -
-  // just gesture, then watch the arrow in front of Pac-Man update.
+  // just gesture, then watch the arrow in front of Pac-Man update. After a
+  // swipe registers, there's a brief cooldown where the baseline keeps
+  // refreshing to the current hand position instead of measuring distance,
+  // so settling/relaxing the hand afterward can't itself count as a swipe.
   if (hand) {
-    if (pmSwipeLastPos) {
+    if (now < pmSwipeCooldownUntil || !pmSwipeLastPos) {
+      pmSwipeLastPos = { x: hand.x, y: hand.y };
+    } else {
       const dx = hand.x - pmSwipeLastPos.x;
       const dy = hand.y - pmSwipeLastPos.y;
       const dist = Math.hypot(dx, dy);
@@ -1022,9 +1030,8 @@ function drawPacmanScene(now, dt) {
           ? { dr: 0, dc: dx > 0 ? 1 : -1 }
           : { dr: dy > 0 ? 1 : -1, dc: 0 };
         pmSwipeLastPos = { x: hand.x, y: hand.y };
+        pmSwipeCooldownUntil = now + PM_SWIPE_COOLDOWN_SECONDS;
       }
-    } else {
-      pmSwipeLastPos = { x: hand.x, y: hand.y };
     }
   } else {
     pmSwipeLastPos = null;
