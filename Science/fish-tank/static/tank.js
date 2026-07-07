@@ -924,6 +924,8 @@ let pmBoardBounds = null; // board's pixel rectangle, for confining the cursor m
 let pmCaughtUntil = 0;
 let pmStarted = false;
 let pmScore = 0;
+let pmLives = 3;
+let pmGameOverUntil = 0;
 let pmInitialized = false;
 
 function pmBuildMaze() {
@@ -1047,13 +1049,19 @@ function pmResetPositions() {
   pmPowerUntil = 0;
 }
 
+function pmFullReset() {
+  pmScore = 0;
+  pmLives = 3;
+  pmResetDots();
+  pmResetPositions();
+  pmCaughtUntil = 0;
+  pmGameOverUntil = 0;
+}
+
 function pmInit() {
   pmInitialized = true;
   pmGrid = pmBuildMaze();
-  pmResetDots();
-  pmResetPositions();
-  pmScore = 0;
-  pmCaughtUntil = 0;
+  pmFullReset();
 }
 
 function pmMoveGhost(g, dt, frightened) {
@@ -1106,6 +1114,10 @@ function drawPacmanScene(now, dt) {
   pmBoardBounds = { left: offX, top: offY, right: offX + tile * PM_COLS, bottom: offY + tile * PM_ROWS };
 
   const caught = now < pmCaughtUntil;
+  const gameOver = now < pmGameOverUntil;
+  if (pmGameOverUntil && !gameOver) {
+    pmFullReset(); // game-over display finished - start a fresh game so it loops unattended
+  }
 
   // Free cursor: just the raw hand position, confined only enough to map to
   // a real board cell. Persists (keeps its last value) while the hand is
@@ -1119,7 +1131,7 @@ function drawPacmanScene(now, dt) {
   }
   const pmDist = pmTargetRow !== null ? pmBFSDistances(pmTargetRow, pmTargetCol) : null;
 
-  if (!caught) {
+  if (!caught && !gameOver) {
     // Wide intersection window (not a narrow instant) so it reliably
     // overlaps with the hand tracker's ~100ms update interval.
     const atRow = Math.abs(pmPac.row - Math.round(pmPac.row)) < PM_TURN_TOLERANCE;
@@ -1163,7 +1175,12 @@ function drawPacmanScene(now, dt) {
             g.row = g.homeRow; g.col = g.homeCol; g.dir = { dr: 0, dc: -1 };
             pmScore += 50;
           } else {
-            pmCaughtUntil = now + 1.4;
+            pmLives -= 1;
+            if (pmLives <= 0) {
+              pmGameOverUntil = now + 3.5;
+            } else {
+              pmCaughtUntil = now + 1.4;
+            }
             pmResetPositions();
             break;
           }
@@ -1269,8 +1286,19 @@ function drawPacmanScene(now, dt) {
   ctx.fillStyle = '#fff';
   ctx.font = `${Math.round(tile * 0.5)}px sans-serif`;
   ctx.fillText(`Score: ${pmScore}`, offX, offY - tile * 0.25);
+  ctx.textAlign = 'right';
+  ctx.fillText(`Lives: ${Math.max(pmLives, 0)}`, offX + tile * PM_COLS, offY - tile * 0.25);
+  ctx.textAlign = 'left';
 
-  if (caught) {
+  if (gameOver) {
+    ctx.fillStyle = 'rgba(255,80,80,0.95)';
+    ctx.font = `${Math.round(tile * 0.8)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('GAME OVER', W / 2, H / 2 - tile * 0.5);
+    ctx.font = `${Math.round(tile * 0.5)}px sans-serif`;
+    ctx.fillText(`Final Score: ${pmScore}`, W / 2, H / 2 + tile * 0.3);
+    ctx.textAlign = 'left';
+  } else if (caught) {
     ctx.fillStyle = 'rgba(255,80,80,0.9)';
     ctx.font = `${Math.round(tile * 0.8)}px sans-serif`;
     ctx.textAlign = 'center';
