@@ -904,8 +904,9 @@ const PM_TURN_TOLERANCE = 0.32; // how close to a cell center counts as "at an i
 // sets the queued direction, shown as an arrow right in front of Pac-Man
 // itself - no separate cursor or on-screen zone to interpret, just "this
 // arrow is what happens next."
-const PM_SWIPE_FRAC = 0.4; // fraction of a tile the hand must move to register as a swipe
+const PM_SWIPE_FRAC = 0.55; // fraction of a tile the hand must move to register as a swipe - was 0.4, triggering too easily on incidental motion
 const PM_SWIPE_COOLDOWN_SECONDS = 0.5; // after a swipe, time to let the hand settle before a new one can register
+const PM_SWIPE_VERTICAL_GAIN = 1.5; // up/down has a smaller natural range of motion against a wall than side-to-side, so weight it higher when picking which axis a swipe was along
 const PM_TUNNEL_ROW = 10; // left/right wraparound passage, classic Pac-Man style
 const PM_POWER_DURATION = 7;
 const PM_POWER_COLOR = '#2233dd';
@@ -1028,9 +1029,11 @@ function drawPacmanScene(now, dt) {
     } else {
       const dx = hand.x - pmSwipeLastPos.x;
       const dy = hand.y - pmSwipeLastPos.y;
-      const dist = Math.hypot(dx, dy);
+      const dist = Math.hypot(dx, dy); // raw distance decides whether a swipe happened at all
       if (dist > tile * PM_SWIPE_FRAC) {
-        pmQueuedDir = Math.abs(dx) > Math.abs(dy)
+        // weighted comparison decides which axis it was along - vertical
+        // gets a boost since it has less room to move against a wall
+        pmQueuedDir = Math.abs(dx) > Math.abs(dy) * PM_SWIPE_VERTICAL_GAIN
           ? { dr: 0, dc: dx > 0 ? 1 : -1 }
           : { dr: dy > 0 ? 1 : -1, dc: 0 };
         pmSwipeLastPos = { x: hand.x, y: hand.y };
