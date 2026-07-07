@@ -793,6 +793,10 @@ let handMarkerHeading = 0;
 let handMarkerLastPos = null;
 
 function drawHandMarker(now) {
+  // Pac-Man already shows the direction arrow tied to its own position -
+  // a separate free-floating hand dot would be redundant/confusing there.
+  if (currentScene === 'pacman') return;
+
   if (!hand) {
     handMarkerLastPos = null;
     return;
