@@ -807,8 +807,11 @@ function drawHandMarker(now) {
   handMarkerLastPos = { x: hand.x, y: hand.y };
 
   const pulse = 1 + Math.sin(now * 3) * 0.12;
-  const mx = hand.x;
-  const my = hand.y;
+  // On the Pac-Man scene, keep the cursor within the board's actual pixel
+  // rectangle instead of letting it drift into the letterboxed margins.
+  const confine = currentScene === 'pacman' && pmBoardBounds;
+  const mx = confine ? Math.max(pmBoardBounds.left, Math.min(pmBoardBounds.right, hand.x)) : hand.x;
+  const my = confine ? Math.max(pmBoardBounds.top, Math.min(pmBoardBounds.bottom, hand.y)) : hand.y;
 
   drawGlow(mx, my, 70 * pulse, 'rgba(255,255,180,0.4)');
   if (currentScene === 'flowers') {
@@ -917,6 +920,7 @@ let pmPac = null;
 let pmGhosts = null;
 let pmTargetRow = null; // nearest open cell to the raw cursor position - persists across hand dropouts
 let pmTargetCol = null;
+let pmBoardBounds = null; // board's pixel rectangle, for confining the cursor marker
 let pmCaughtUntil = 0;
 let pmStarted = false;
 let pmScore = 0;
@@ -1096,6 +1100,10 @@ function drawPacmanScene(now, dt) {
   const offX = (W - tile * PM_COLS) / 2;
   const offY = (H - tile * PM_ROWS) / 2;
   const toPx = (row, col) => ({ x: offX + col * tile, y: offY + row * tile });
+
+  // Shared with drawHandMarker so the cursor dot stays within the board's
+  // pixel rectangle instead of drifting into the letterboxed margins.
+  pmBoardBounds = { left: offX, top: offY, right: offX + tile * PM_COLS, bottom: offY + tile * PM_ROWS };
 
   const caught = now < pmCaughtUntil;
 
