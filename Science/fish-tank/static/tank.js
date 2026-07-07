@@ -936,7 +936,7 @@ const PM_RAW_MAP = [
 
 const PM_COLS = 19;
 const PM_ROWS = PM_RAW_MAP.length;
-const PM_SPEED = 2.4; // cells/sec - a bit quicker than the ghosts so it's easier to escape
+const PM_SPEED = 2.9; // cells/sec - clearly quicker than the ghosts so it's easy to escape
 const PM_GHOST_SPEED = 1.5; // kept slower than Pac-Man to make the game more forgiving
 // Error-adaptive cursor smoothing: the cursor eases toward the hand with a
 // time constant that STRETCHES when the hand is near it (steady, accurate,
@@ -954,7 +954,7 @@ const PM_TURN_TOLERANCE = 0.32; // how close to a cell center counts as "at an i
 // exact cursor position barely matters since it just picks a rough
 // destination, not a precise instant-by-instant direction.
 const PM_TUNNEL_ROW = 10; // left/right wraparound passage, classic Pac-Man style
-const PM_POWER_DURATION = 7;
+const PM_POWER_DURATION = 12;
 const PM_POWER_COLOR = '#2233dd';
 const PM_WALL_COLOR = '#1a3fbf';
 const PM_GHOST_COLORS = ['#ff4d4d', '#ffb3f0', '#66e0ff'];
@@ -1383,7 +1383,10 @@ function drawPacmanScene(now, dt) {
 
   // ghosts
   const frightenedNow = now < pmPowerUntil;
-  const flashingNow = frightenedNow && (pmPowerUntil - now) < 2 && Math.floor(now * 6) % 2 === 0;
+  // Blink the whole time the power pellet is active (white<->blue), and blink
+  // faster in the last 2s as a "running out" warning.
+  const blinkRate = (pmPowerUntil - now) < 2 ? 8 : 3.5;
+  const flashingNow = frightenedNow && Math.floor(now * blinkRate) % 2 === 0;
   for (const g of pmGhosts) {
     const p = toPx(g.row, g.col);
     const cx = p.x + tile / 2, cy = p.y + tile / 2;
