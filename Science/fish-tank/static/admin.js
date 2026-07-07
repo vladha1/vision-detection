@@ -78,6 +78,10 @@ async function setInputMode(mode) {
 loadInputMode();
 setInterval(loadInputMode, 3000); // reflect changes made from the controller page
 
+document.getElementById('pmResetBtn').addEventListener('click', async () => {
+  await fetch('/api/pmreset', { method: 'POST' });
+});
+
 fileInput.addEventListener('change', () => showPreview(fileInput.files[0]));
 
 ['dragover', 'dragenter'].forEach(evt =>

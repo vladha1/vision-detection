@@ -39,6 +39,12 @@ async function setMode(next) {
 
 modeToggle.addEventListener('click', () => setMode(mode === 'controller' ? 'hand' : 'controller'));
 
+const resetBtn = document.getElementById('resetBtn');
+resetBtn.addEventListener('click', async () => {
+  try { await fetch('/api/pmreset', { method: 'POST' }); setOnline(true); }
+  catch (e) { setOnline(false); }
+});
+
 async function sendDir(dir) {
   try {
     await fetch('/api/control', {

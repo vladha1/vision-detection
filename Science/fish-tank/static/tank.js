@@ -778,11 +778,18 @@ const PM_ARROW_VECTORS = {
 };
 let pmControllerActive = false;
 let pmArrowDir = null;
+let pmLastResetSeq = null; // watches the server reset counter; a change restarts the game
 async function syncControl() {
   try {
     const d = await (await fetch('/api/control')).json();
     pmControllerActive = d.mode === 'controller';
     pmArrowDir = (d.dir && PM_ARROW_VECTORS[d.dir]) ? PM_ARROW_VECTORS[d.dir] : null;
+    if (pmLastResetSeq === null) {
+      pmLastResetSeq = d.reset; // first sync: adopt current value, don't reset on load
+    } else if (d.reset !== pmLastResetSeq) {
+      pmLastResetSeq = d.reset;
+      if (pmInitialized) pmFullReset();
+    }
   } catch (e) {
     pmControllerActive = false;
     pmArrowDir = null;
@@ -954,7 +961,7 @@ const PM_TURN_TOLERANCE = 0.32; // how close to a cell center counts as "at an i
 // exact cursor position barely matters since it just picks a rough
 // destination, not a precise instant-by-instant direction.
 const PM_TUNNEL_ROW = 10; // left/right wraparound passage, classic Pac-Man style
-const PM_POWER_DURATION = 12;
+const PM_POWER_DURATION = 15;
 const PM_POWER_COLOR = '#2233dd';
 const PM_WALL_COLOR = '#1a3fbf';
 const PM_GHOST_COLORS = ['#ff4d4d', '#ffb3f0', '#66e0ff'];

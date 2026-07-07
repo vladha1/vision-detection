@@ -99,7 +99,7 @@ scene_lock = threading.Lock()
 # "controller" mode the Pac-Man scene ignores the camera hand entirely.
 CONTROL_DIRS = ("up", "down", "left", "right")
 INPUT_MODES = ("hand", "controller")
-pm_control = {"dir": None}
+pm_control = {"dir": None, "reset": 0}  # "reset" is a counter the display watches to restart
 pm_state = {"score": 0, "lives": 3}
 input_state = {"mode": "hand"}
 control_lock = threading.Lock()
@@ -182,7 +182,20 @@ def api_control_set():
 @app.route("/api/control")
 def api_control_get():
     with control_lock:
-        return jsonify({"dir": pm_control["dir"], "mode": input_state["mode"]})
+        return jsonify({
+            "dir": pm_control["dir"],
+            "mode": input_state["mode"],
+            "reset": pm_control["reset"],
+        })
+
+
+@app.route("/api/pmreset", methods=["POST"])
+def api_pmreset():
+    # Bumps a counter the display watches; works for both hand and phone play.
+    with control_lock:
+        pm_control["reset"] += 1
+        pm_control["dir"] = None
+    return jsonify({"ok": True})
 
 
 @app.route("/api/inputmode", methods=["POST"])

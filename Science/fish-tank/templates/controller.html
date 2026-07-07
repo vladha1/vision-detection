@@ -75,7 +75,14 @@
     background: #101623; border: 2px solid #263049;
   }
 
-  #status { margin-top: 20px; font-size: 13px; color: var(--muted); min-height: 18px; text-align: center; }
+  .reset-btn {
+    margin-top: 22px; padding: 12px 26px; border-radius: 12px;
+    border: 1px solid #33415f; background: var(--panel); color: var(--muted);
+    font-size: 15px; font-weight: 700; cursor: pointer;
+  }
+  .reset-btn:active { background: #3a1414; border-color: var(--flee, #ff6b6b); color: #ff6b6b; }
+
+  #status { margin-top: 14px; font-size: 13px; color: var(--muted); min-height: 18px; text-align: center; }
   #status.on { color: #3ddc84; }
 </style>
 </head>
@@ -97,6 +104,8 @@
     <button class="right" data-dir="right" aria-label="Right">&#9654;</button>
     <button class="down"  data-dir="down"  aria-label="Down">&#9660;</button>
   </div>
+
+  <button id="resetBtn" class="reset-btn">Reset game</button>
 
   <div id="status">Connecting&hellip;</div>
 
