@@ -896,14 +896,11 @@ const PM_ROWS = PM_RAW_MAP.length;
 const PM_SPEED = 3.0; // cells/sec - slower than before so there's a real reaction window
 const PM_GHOST_SPEED = 2.4;
 const PM_TURN_TOLERANCE = 0.32; // how close to a cell center counts as "at an intersection" - wide enough that the ~100ms hand-tracking update interval reliably lands inside it
-// Steering is a big-zone system (which quarter of the board, relative to a
-// fixed center point) rather than tracking precise cursor position - a
-// nearest-open-cell search near a wall boundary can flip corridors on tiny
-// camera noise, and no amount of smoothing the cursor's motion fixes a
-// target that itself keeps flipping. Big zones plus a sustain requirement
-// are naturally tolerant of that noise.
-const PM_ZONE_DEADZONE_FRAC = 0.12; // fraction of the board's half-size treated as "too close to center, no clear zone"
-const PM_ZONE_SUSTAIN_SECONDS = 0.18; // a candidate zone must hold this long before it's accepted, filtering single-frame noise
+// Steering: a swipe/gesture (delta between hand samples, past a threshold)
+// sets the queued direction, shown as an arrow right in front of Pac-Man
+// itself - no separate cursor or on-screen zone to interpret, just "this
+// arrow is what happens next."
+const PM_SWIPE_FRAC = 0.4; // fraction of a tile the hand must move to register as a swipe
 const PM_TUNNEL_ROW = 10; // left/right wraparound passage, classic Pac-Man style
 const PM_POWER_DURATION = 7;
 const PM_POWER_COLOR = '#2233dd';
@@ -917,8 +914,7 @@ let pmPowerUntil = 0;
 let pmPac = null;
 let pmGhosts = null;
 let pmQueuedDir = null; // persists across frames like a classic key-buffer, instead of being recomputed fresh every frame
-let pmZoneCandidate = null; // the zone the hand is currently sitting in, before it's held long enough to be accepted
-let pmZoneCandidateSince = 0;
+let pmSwipeLastPos = null; // last hand sample used for swipe/delta detection
 let pmCaughtUntil = 0;
 let pmStarted = false;
 let pmScore = 0;
@@ -962,7 +958,7 @@ function pmResetPositions() {
   pmStarted = false; // ghosts stay still until Pac-Man's first real move
   pmPowerUntil = 0;
   pmQueuedDir = null;
-  pmZoneCandidate = null;
+  pmSwipeLastPos = null;
 }
 
 function pmInit() {
@@ -1013,32 +1009,25 @@ function drawPacmanScene(now, dt) {
 
   const caught = now < pmCaughtUntil;
 
-  // Big-zone steering: which quarter of the board (relative to its fixed
-  // center) the hand is in, requiring it to hold that zone for
-  // PM_ZONE_SUSTAIN_SECONDS before it's accepted. Zones are huge and the
-  // reference point never moves, so ordinary camera noise can't flip the
-  // result the way a precise cursor/nearest-cell search could.
+  // Swipe/gesture steering: a clear movement of the hand (past a threshold)
+  // sets the queued direction. No cursor to track or zone to interpret -
+  // just gesture, then watch the arrow in front of Pac-Man update.
   if (hand) {
-    const centerRow = (PM_ROWS - 1) / 2;
-    const centerCol = (PM_COLS - 1) / 2;
-    const handRow = (hand.y - offY) / tile;
-    const handCol = (hand.x - offX) / tile;
-    const dr = handRow - centerRow;
-    const dc = handCol - centerCol;
-    const dist = Math.hypot(dr, dc);
-    const deadzone = Math.max(PM_ROWS, PM_COLS) / 2 * PM_ZONE_DEADZONE_FRAC;
-    if (dist > deadzone) {
-      const candidate = Math.abs(dc) > Math.abs(dr)
-        ? { dr: 0, dc: dc > 0 ? 1 : -1 }
-        : { dr: dr > 0 ? 1 : -1, dc: 0 };
-      if (!pmZoneCandidate || candidate.dr !== pmZoneCandidate.dr || candidate.dc !== pmZoneCandidate.dc) {
-        pmZoneCandidate = candidate;
-        pmZoneCandidateSince = now;
+    if (pmSwipeLastPos) {
+      const dx = hand.x - pmSwipeLastPos.x;
+      const dy = hand.y - pmSwipeLastPos.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > tile * PM_SWIPE_FRAC) {
+        pmQueuedDir = Math.abs(dx) > Math.abs(dy)
+          ? { dr: 0, dc: dx > 0 ? 1 : -1 }
+          : { dr: dy > 0 ? 1 : -1, dc: 0 };
+        pmSwipeLastPos = { x: hand.x, y: hand.y };
       }
-      if (now - pmZoneCandidateSince > PM_ZONE_SUSTAIN_SECONDS) {
-        pmQueuedDir = pmZoneCandidate;
-      }
+    } else {
+      pmSwipeLastPos = { x: hand.x, y: hand.y };
     }
+  } else {
+    pmSwipeLastPos = null;
   }
 
   if (!caught) {
@@ -1187,36 +1176,27 @@ function drawPacmanScene(now, dt) {
     ctx.restore();
   }
 
-  // Zone overlay: shows the four steering regions (diagonals from the
-  // board's center) and highlights whichever one is currently accepted,
-  // so the hand-to-direction mapping is directly visible on screen.
-  {
-    const centerX = offX + (tile * PM_COLS) / 2;
-    const centerY = offY + (tile * PM_ROWS) / 2;
+  // Arrow indicator right in front of Pac-Man showing the currently queued
+  // direction - directly tied to Pac-Man's own position, not a separate
+  // cursor or on-screen zone to interpret.
+  if (pmQueuedDir) {
+    const p = toPx(pmPac.row, pmPac.col);
+    const cx = p.x + tile / 2, cy = p.y + tile / 2;
+    const angle = Math.atan2(pmQueuedDir.dr, pmQueuedDir.dc);
+    const dist = tile * 1.3;
     ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.translate(cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist);
+    ctx.rotate(angle);
+    ctx.fillStyle = '#39ff9d';
+    ctx.strokeStyle = '#000';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(centerX, centerY); ctx.lineTo(0, 0);
-    ctx.moveTo(centerX, centerY); ctx.lineTo(W, 0);
-    ctx.moveTo(centerX, centerY); ctx.lineTo(0, H);
-    ctx.moveTo(centerX, centerY); ctx.lineTo(W, H);
+    ctx.moveTo(tile * 0.35, 0);
+    ctx.lineTo(-tile * 0.2, -tile * 0.22);
+    ctx.lineTo(-tile * 0.2, tile * 0.22);
+    ctx.closePath();
+    ctx.fill();
     ctx.stroke();
-
-    if (pmQueuedDir) {
-      let p1, p2;
-      if (pmQueuedDir.dc === 1) { p1 = [W, 0]; p2 = [W, H]; }
-      else if (pmQueuedDir.dc === -1) { p1 = [0, 0]; p2 = [0, H]; }
-      else if (pmQueuedDir.dr === 1) { p1 = [0, H]; p2 = [W, H]; }
-      else { p1 = [0, 0]; p2 = [W, 0]; }
-      ctx.fillStyle = 'rgba(57,255,157,0.14)';
-      ctx.beginPath();
-      ctx.moveTo(centerX, centerY);
-      ctx.lineTo(p1[0], p1[1]);
-      ctx.lineTo(p2[0], p2[1]);
-      ctx.closePath();
-      ctx.fill();
-    }
     ctx.restore();
   }
 
