@@ -907,9 +907,9 @@ const PM_GHOST_SPEED = 1.5; // kept ~the same ratio to Pac-Man so difficulty is 
 // time constant that STRETCHES when the hand is near it (steady, accurate,
 // jitter-proof fine control) and SHRINKS when the hand makes a big deliberate
 // move (snappy, responsive) - so it's slow by default yet quick when needed.
-const PM_CURSOR_TAU_SLOW = 0.38; // s: heavy smoothing when the hand sits near the cursor
-const PM_CURSOR_TAU_FAST = 0.07; // s: light smoothing when the hand is far from the cursor
-const PM_CURSOR_SNAP_TILES = 5;  // hand-to-cursor error (tiles) at which smoothing is fully fast
+const PM_CURSOR_TAU_SLOW = 0.60; // s: heavy smoothing when the hand sits near the cursor
+const PM_CURSOR_TAU_FAST = 0.16; // s: light smoothing when the hand is far from the cursor
+const PM_CURSOR_SNAP_TILES = 6;  // hand-to-cursor error (tiles) at which smoothing is fully fast
 const PM_TURN_TOLERANCE = 0.32; // how close to a cell center counts as "at an intersection" - wide enough that the ~100ms hand-tracking update interval reliably lands inside it
 // Steering: a free cursor follows the raw hand position (no confinement, no
 // gesture detection), and Pac-Man autonomously paths toward it - shortest
