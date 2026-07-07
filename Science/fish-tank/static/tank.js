@@ -793,11 +793,11 @@ let handMarkerHeading = 0;
 let handMarkerLastPos = null;
 
 function drawHandMarker(now) {
-  // On the Pac-Man scene, a lost hand falls back to a marker anchored ahead
-  // of Pac-Man (see pmCursorPx) instead of just vanishing - other scenes
-  // still hide the marker outright when untracked.
-  const fallback = !hand && currentScene === 'pacman' ? pmCursorPx : null;
-  const source = hand || fallback;
+  // On the Pac-Man scene the marker follows the smoothed cursor (pmCursorPx),
+  // which eases toward the hand when present and leads Pac-Man when it isn't -
+  // and stays hidden until the first hand appears. Other scenes track the raw
+  // hand and hide the marker outright when untracked.
+  const source = currentScene === 'pacman' ? pmCursorPx : hand;
   if (!source) {
     handMarkerLastPos = null;
     return;
@@ -923,9 +923,11 @@ let pmPowerDots = null;
 let pmPowerUntil = 0;
 let pmPac = null;
 let pmGhosts = null;
-let pmTargetRow = null; // nearest open cell to the raw cursor position - persists across hand dropouts
+let pmTargetRow = null; // nearest open cell to the smoothed cursor - drives the BFS pathing
 let pmTargetCol = null;
-let pmCursorPx = null; // fallback marker position (ahead of Pac-Man) while the hand is untracked
+let pmCursorPx = null; // smoothed cursor marker pixel position {x,y}, eased toward its goal each frame
+let pmHandSeen = false; // gates all motion until a hand first appears, so the game waits for a player
+let pmLastHeading = { dr: 0, dc: -1 }; // remembered heading, so the default cursor can lead Pac-Man
 let pmBoardBounds = null; // board's pixel rectangle, for confining the cursor marker
 let pmCaughtUntil = 0;
 let pmStarted = false;
@@ -982,6 +984,21 @@ function pmNearestOpenCell(row, col) {
     }
   }
   return { row: r0, col: c0 };
+}
+
+// Walks forward along `dir` from (row, col), up to maxLead cells, stopping
+// before the first wall/edge - so the returned cell is always a valid open
+// cell genuinely AHEAD of the entity (used to lead the default cursor).
+function pmLeadCell(row, col, dir, maxLead) {
+  const r = Math.round(row), c = Math.round(col);
+  let lr = r, lc = c;
+  for (let i = 1; i <= maxLead; i++) {
+    const nr = r + dir.dr * i, nc = c + dir.dc * i;
+    if (nr < 0 || nr >= PM_ROWS || nc < 0 || nc >= PM_COLS) break;
+    if (pmIsWall(nr, nc)) break;
+    lr = nr; lc = nc;
+  }
+  return { row: lr, col: lc };
 }
 
 // BFS distance-to-target for every reachable cell, computed once per frame
@@ -1062,6 +1079,9 @@ function pmFullReset() {
   pmResetPositions();
   pmCaughtUntil = 0;
   pmGameOverUntil = 0;
+  pmHandSeen = false; // wait for a hand again before the fresh game starts
+  pmCursorPx = null;
+  pmLastHeading = { dr: 0, dc: -1 };
 }
 
 function pmInit() {
@@ -1125,28 +1145,46 @@ function drawPacmanScene(now, dt) {
     pmFullReset(); // game-over display finished - start a fresh game so it loops unattended
   }
 
-  // Free cursor: just the raw hand position, confined only enough to map to
-  // a real board cell. While the hand is untracked, rather than freezing at
-  // the last raw position (which stalls Pac-Man once he reaches it), keep
-  // projecting the target a few cells ahead along his current heading so he
-  // keeps walking - and re-anchor to the real hand the moment it's sensed.
+  // --- Smoothed cursor & target -----------------------------------------
+  // The cursor is a persistent pixel position that eases toward a goal every
+  // frame, so it never snaps abruptly (and it filters the raw ~10Hz hand
+  // jitter). With a hand it eases toward the hand; with no hand it eases
+  // toward a point a few cells AHEAD of Pac-Man, so the default cursor leads
+  // him rather than freezing behind. All motion waits for a first hand.
+  if (hand) pmHandSeen = true;
+  if (pmPac.dir.dr || pmPac.dir.dc) pmLastHeading = pmPac.dir;
+
+  let goalPx = null;
   if (hand) {
-    const rawRow = (hand.y - offY) / tile;
-    const rawCol = (hand.x - offX) / tile;
-    const t = pmNearestOpenCell(rawRow, rawCol);
+    goalPx = {
+      x: Math.max(offX, Math.min(offX + tile * PM_COLS, hand.x)),
+      y: Math.max(offY, Math.min(offY + tile * PM_ROWS, hand.y)),
+    };
+  } else if (pmHandSeen) {
+    const dir = (pmPac.dir.dr || pmPac.dir.dc) ? pmPac.dir : pmLastHeading;
+    const lead = pmLeadCell(pmPac.row, pmPac.col, dir, 3);
+    goalPx = { x: offX + (lead.col + 0.5) * tile, y: offY + (lead.row + 0.5) * tile };
+  }
+
+  if (goalPx) {
+    if (!pmCursorPx) {
+      pmCursorPx = { x: goalPx.x, y: goalPx.y };
+    } else {
+      const k = 1 - Math.exp(-dt / 0.12); // framerate-independent easing (~0.12s time constant)
+      pmCursorPx.x += (goalPx.x - pmCursorPx.x) * k;
+      pmCursorPx.y += (goalPx.y - pmCursorPx.y) * k;
+    }
+    const t = pmNearestOpenCell((pmCursorPx.y - offY) / tile, (pmCursorPx.x - offX) / tile);
     pmTargetRow = t.row;
     pmTargetCol = t.col;
-    pmCursorPx = null;
   } else {
-    const dir = (pmPac.dir.dr || pmPac.dir.dc) ? pmPac.dir : { dr: 0, dc: -1 };
-    const t = pmNearestOpenCell(pmPac.row + dir.dr * 3, pmPac.col + dir.dc * 3);
-    pmTargetRow = t.row;
-    pmTargetCol = t.col;
-    pmCursorPx = { x: offX + (t.col + 0.5) * tile, y: offY + (t.row + 0.5) * tile };
+    pmCursorPx = null;
+    pmTargetRow = null;
+    pmTargetCol = null;
   }
   const pmDist = pmTargetRow !== null ? pmBFSDistances(pmTargetRow, pmTargetCol) : null;
 
-  if (!caught && !gameOver) {
+  if (!caught && !gameOver && pmHandSeen) {
     // Wide intersection window (not a narrow instant) so it reliably
     // overlaps with the hand tracker's ~100ms update interval.
     const atRow = Math.abs(pmPac.row - Math.round(pmPac.row)) < PM_TURN_TOLERANCE;
@@ -1312,6 +1350,12 @@ function drawPacmanScene(now, dt) {
     ctx.fillText('GAME OVER', W / 2, H / 2 - tile * 0.5);
     ctx.font = `${Math.round(tile * 0.5)}px sans-serif`;
     ctx.fillText(`Final Score: ${pmScore}`, W / 2, H / 2 + tile * 0.3);
+    ctx.textAlign = 'left';
+  } else if (!pmHandSeen) {
+    ctx.fillStyle = `rgba(255,255,255,${0.6 + 0.35 * Math.abs(Math.sin(now * 2.5))})`;
+    ctx.font = `${Math.round(tile * 0.7)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('Raise your hand to start', W / 2, H / 2);
     ctx.textAlign = 'left';
   } else if (caught) {
     ctx.fillStyle = 'rgba(255,80,80,0.9)';
