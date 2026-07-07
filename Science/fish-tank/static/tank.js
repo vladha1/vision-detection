@@ -901,8 +901,8 @@ const PM_RAW_MAP = [
 
 const PM_COLS = 19;
 const PM_ROWS = PM_RAW_MAP.length;
-const PM_SPEED = 2.6; // cells/sec - calmer tempo so it's easier to place and doesn't dart away
-const PM_GHOST_SPEED = 2.1; // kept ~the same ratio to Pac-Man so difficulty is unchanged
+const PM_SPEED = 1.9; // cells/sec - deliberately slow top speed so it's easy to place and follow
+const PM_GHOST_SPEED = 1.5; // kept ~the same ratio to Pac-Man so difficulty is unchanged
 // Error-adaptive cursor smoothing: the cursor eases toward the hand with a
 // time constant that STRETCHES when the hand is near it (steady, accurate,
 // jitter-proof fine control) and SHRINKS when the hand makes a big deliberate
@@ -1211,12 +1211,21 @@ function drawPacmanScene(now, dt) {
     const atCol = Math.abs(pmPac.col - Math.round(pmPac.col)) < PM_TURN_TOLERANCE;
     if (atRow && atCol && pmDist) {
       const r = Math.round(pmPac.row), c = Math.round(pmPac.col);
-      const step = pmBestStepToward(r, c, pmPac.dir, pmDist);
-      const changing = step.dr !== pmPac.dir.dr || step.dc !== pmPac.dir.dc;
-      if (changing && !pmIsWall(r + step.dr, c + step.dc)) {
-        pmPac.dir = step;
+      if (r === pmTargetRow && c === pmTargetCol) {
+        // Arrived at the target cell: park exactly on it and wait. Without
+        // this he'd step onto a neighbour (all one step from the target) and
+        // the BFS would immediately send him back - an endless oscillation
+        // whenever the hand is held still on one spot.
         pmPac.row = r; pmPac.col = c;
-        pmStarted = true; // only counts as "started" once actually being directed somewhere
+        pmPac.dir = { dr: 0, dc: 0 };
+      } else {
+        const step = pmBestStepToward(r, c, pmPac.dir, pmDist);
+        const changing = step.dr !== pmPac.dir.dr || step.dc !== pmPac.dir.dc;
+        if (changing && !pmIsWall(r + step.dr, c + step.dc)) {
+          pmPac.dir = step;
+          pmPac.row = r; pmPac.col = c;
+          pmStarted = true; // only counts as "started" once actually being directed somewhere
+        }
       }
     }
     if (pmPac.dir.dr || pmPac.dir.dc) {
