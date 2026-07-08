@@ -1936,10 +1936,13 @@ let paintCursor = null;             // last known cursor position (kept visible 
 let dwellAnchor = null, dwellStart = 0, dwellArmed = false;
 let paintClickFlash = 0;            // time of last click, for a brief confirm pulse
 let paintLastHand = 0;
+let paintSpeed = 0;                 // smoothed hand speed (px/s)
+let paintPrevPos = null;
 const PAINT_WALL_COLOR = '#ece7dd';       // an off-white wall so colours read like paint
 const PAINT_COLORS = ['#e53935', '#fb8c00', '#fdd835', '#43a047', '#00acc1', '#1e88e5', '#5e35b1', '#d81b60', '#6d4c41', '#111111'];
 const PAINT_DWELL_TIME = 0.6;             // seconds to hold still to "click"
 const PAINT_DWELL_RADIUS = 30;            // px; moving beyond this re-arms the dwell
+const PAINT_TRAVEL_SPEED = 1700;          // px/s; a flick faster than this = "moving away" -> lifts the pen
 const PAINT_IDLE_CLEAR = 90;              // seconds with no hand -> auto-wipe
 
 function ensurePaintLayer() {
@@ -2071,6 +2074,20 @@ function drawPaintScene(now, dt) {
   if (hand) paintLastHand = now;
   if (paintLastHand && now - paintLastHand > PAINT_IDLE_CLEAR) { p.clearRect(0, 0, W, H); paintLastHand = now; paintPenDown = false; }
 
+  // --- hand speed: a fast flick means "moving away" (travelling), which lifts
+  // the pen automatically so you don't have to dwell to stop drawing ---
+  if (hand) {
+    if (paintPrevPos) {
+      const inst = Math.hypot(hand.x - paintPrevPos.x, hand.y - paintPrevPos.y) / Math.max(dt, 1e-3);
+      paintSpeed += (inst - paintSpeed) * 0.5;
+    } else paintSpeed = 0;
+    paintPrevPos = { x: hand.x, y: hand.y };
+    if (paintPenDown && paintSpeed > PAINT_TRAVEL_SPEED) { paintPenDown = false; paintLast = null; }
+  } else {
+    paintPrevPos = null; paintSpeed = 0;
+  }
+  const travelling = paintSpeed > PAINT_TRAVEL_SPEED;
+
   // --- dwell "click": hold the hand still to trigger ---
   let dwellProgress = 0;
   if (hand) {
@@ -2091,8 +2108,8 @@ function drawPaintScene(now, dt) {
 
   const hovered = (hand && hand.y < barH) ? Math.floor(hand.x / iw) : null;
 
-  // paint only while the pen is down, below the bar, and actually moving
-  if (paintPenDown && hand && hand.y >= barH) {
+  // paint only while the pen is down, below the bar, moving, and not flicking away
+  if (paintPenDown && !travelling && hand && hand.y >= barH) {
     const cur = { x: hand.x, y: hand.y };
     if (paintLast) {
       const d = Math.hypot(cur.x - paintLast.x, cur.y - paintLast.y);
@@ -2123,7 +2140,7 @@ function drawPaintScene(now, dt) {
   ctx.font = `${Math.round(barH * 0.28)}px sans-serif`;
   ctx.fillStyle = paintPenDown ? 'rgba(30,120,40,0.9)' : 'rgba(60,60,60,0.75)';
   const hint = !paintCursor ? 'Move your hand to begin'
-    : paintPenDown ? 'DRAWING - hold still to lift the pen'
+    : paintPenDown ? 'DRAWING - flick away fast (or hold still) to lift the pen'
       : 'Hold still to start drawing, or on a palette item to pick it';
   ctx.fillText(hint, W / 2, H - Math.max(16, barH * 0.35));
   ctx.restore();
