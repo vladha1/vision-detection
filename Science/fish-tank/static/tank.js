@@ -1049,11 +1049,14 @@ function drawHandMarker(now) {
     const marker = { x: mx, y: my, maxRadius: 24 * pulse, petals: 6, color: HAND_MARKER_COLOR, kind: 'daisy', rotation: now * 0.6 };
     drawFlower(marker, 1, 0.85, 0);
   } else if (currentScene === 'paint') {
-    // a soft white "brush tip" so you can see where the light will land
+    // a brush ring showing the actual size and colour (or eraser)
+    const br = (typeof paintBrush !== 'undefined' ? paintBrush : 20);
     ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    ctx.beginPath(); ctx.arc(mx, my, 7 * pulse, 0, Math.PI * 2); ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = paintErase ? '#333' : paintColor;
+    ctx.beginPath(); ctx.arc(mx, my, br, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = paintErase ? 'rgba(0,0,0,0.15)' : paintColor;
+    ctx.beginPath(); ctx.arc(mx, my, 3, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
   } else if (currentScene === 'constellation') {
     // a cool glowing star-cursor that hints at the next star to connect
@@ -1922,14 +1925,25 @@ function drawFishScene(now, dt) {
 }
 
 // ============================================================================
-// Paint / light-graffiti wall: the hand lays down a glowing, colour-cycling
-// light trail that slowly evaporates. Paint accumulates on a persistent
-// offscreen layer (not a growing point list), so long strokes stay fast.
+// Paint wall: a real finger-painting tool. Paint is PERSISTENT (it stays so
+// you can build up a picture) on an offscreen layer. A palette bar across the
+// top lets you pick a colour, brush size, an eraser, or clear the wall - all
+// by hovering (dwelling) over an item, since a tracked hand has no "click".
+// Below the bar the hand paints; the bar doubles as a "move without painting"
+// safe zone. After a long idle with no hand, the wall auto-wipes for the next
+// person.
 // ============================================================================
 let paintLayer = null, paintLayerCtx = null, paintLayerW = 0, paintLayerH = 0;
 let paintLast = null;
-let paintDrips = [];
-const PAINT_FADE_SECONDS = 7; // how long paint takes to evaporate to black
+let paintColor = '#1e88e5';
+let paintErase = false;
+let paintBrush = 28;
+let paintHoverItem = null, paintHoverStart = 0, paintHoverDone = false;
+let paintLastHand = 0;
+const PAINT_WALL_COLOR = '#ece7dd';       // an off-white wall so colours read like paint
+const PAINT_COLORS = ['#e53935', '#fb8c00', '#fdd835', '#43a047', '#00acc1', '#1e88e5', '#5e35b1', '#d81b60', '#6d4c41', '#111111'];
+const PAINT_DWELL = 0.35;                 // seconds of hover to select a palette item
+const PAINT_IDLE_CLEAR = 90;              // seconds with no hand -> auto-wipe
 
 function ensurePaintLayer() {
   const w = Math.max(1, W | 0), h = Math.max(1, H | 0);
@@ -1941,56 +1955,118 @@ function ensurePaintLayer() {
   }
 }
 
-function paintGlow(p, x, y, r, hue, alpha) {
+function paintPaletteItems() {
+  const items = PAINT_COLORS.map(c => ({ type: 'color', color: c }));
+  items.push({ type: 'erase' });
+  items.push({ type: 'size', size: 14 });
+  items.push({ type: 'size', size: 28 });
+  items.push({ type: 'size', size: 54 });
+  items.push({ type: 'clear' });
+  return items;
+}
+
+function paintDab(p, x, y, r, color, erase) {
+  if (erase) {
+    p.save();
+    p.globalCompositeOperation = 'destination-out';
+    p.fillStyle = '#000';
+    p.beginPath(); p.arc(x, y, r, 0, Math.PI * 2); p.fill();
+    p.restore();
+    return;
+  }
   const g = p.createRadialGradient(x, y, 0, x, y, r);
-  g.addColorStop(0, `hsla(${hue},100%,72%,${alpha})`);
-  g.addColorStop(0.4, `hsla(${hue},100%,55%,${alpha * 0.6})`);
-  g.addColorStop(1, `hsla(${hue},100%,50%,0)`);
+  g.addColorStop(0, color);
+  g.addColorStop(0.65, color);
+  g.addColorStop(1, color + '00'); // soft edge (7-char hex -> transparent)
   p.fillStyle = g;
   p.beginPath(); p.arc(x, y, r, 0, Math.PI * 2); p.fill();
+}
+
+function drawPaintPalette(now, items, barH, iw, hovered) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(20,22,28,0.82)';
+  ctx.fillRect(0, 0, W, barH);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i], x = i * iw, cx = x + iw / 2, cy = barH / 2;
+    const selected = (it.type === 'color' && !paintErase && it.color === paintColor)
+      || (it.type === 'erase' && paintErase)
+      || (it.type === 'size' && it.size === paintBrush);
+    if (selected) { ctx.fillStyle = 'rgba(255,255,255,0.16)'; ctx.fillRect(x + 2, 2, iw - 4, barH - 4); }
+    if (it.type === 'color') {
+      ctx.fillStyle = it.color;
+      ctx.beginPath(); ctx.arc(cx, cy, Math.min(barH * 0.32, iw * 0.34), 0, Math.PI * 2); ctx.fill();
+    } else if (it.type === 'erase') {
+      ctx.fillStyle = '#eaeaea'; ctx.font = `${Math.round(barH * 0.26)}px sans-serif`;
+      ctx.fillText('Erase', cx, cy);
+    } else if (it.type === 'size') {
+      ctx.fillStyle = '#eaeaea';
+      ctx.beginPath(); ctx.arc(cx, cy, Math.min(it.size * 0.42, barH * 0.34), 0, Math.PI * 2); ctx.fill();
+    } else if (it.type === 'clear') {
+      ctx.fillStyle = '#ff6b6b'; ctx.font = `${Math.round(barH * 0.26)}px sans-serif`;
+      ctx.fillText('Clear', cx, cy);
+    }
+    if (hovered === i && !paintHoverDone) { // dwell-to-select progress
+      const prog = Math.min(1, (now - paintHoverStart) / PAINT_DWELL);
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(x + 3, barH - 3); ctx.lineTo(x + 3 + (iw - 6) * prog, barH - 3); ctx.stroke();
+    }
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, barH); ctx.lineTo(W, barH); ctx.stroke();
+  ctx.restore();
 }
 
 function drawPaintScene(now, dt) {
   ensurePaintLayer();
   const p = paintLayerCtx;
+  const items = paintPaletteItems();
+  const barH = Math.max(58, Math.min(100, H * 0.09));
+  const iw = W / items.length;
 
-  // evaporate: gently fade the whole accumulated layer toward black
-  p.globalCompositeOperation = 'source-over';
-  p.fillStyle = `rgba(5,6,10,${Math.min(1, dt / PAINT_FADE_SECONDS)})`;
-  p.fillRect(0, 0, W, H);
+  // auto-wipe after a long idle so it's fresh for the next person
+  if (hand) paintLastHand = now;
+  if (paintLastHand && now - paintLastHand > PAINT_IDLE_CLEAR) { p.clearRect(0, 0, W, H); paintLastHand = now; }
 
-  p.globalCompositeOperation = 'lighter';
-  const hue = (now * 55) % 360; // continuous rainbow along a stroke
-  if (hand) {
+  // palette: dwell over an item (in the top bar) to select it
+  let hovered = null;
+  if (hand && hand.y < barH) {
+    const idx = Math.floor(hand.x / iw);
+    if (idx >= 0 && idx < items.length) hovered = idx;
+  }
+  if (hovered !== paintHoverItem) { paintHoverItem = hovered; paintHoverStart = now; paintHoverDone = false; }
+  if (hovered !== null && !paintHoverDone && now - paintHoverStart > PAINT_DWELL) {
+    paintHoverDone = true; // fires once per hover entry
+    const it = items[hovered];
+    if (it.type === 'color') { paintColor = it.color; paintErase = false; }
+    else if (it.type === 'erase') { paintErase = true; }
+    else if (it.type === 'size') { paintBrush = it.size; }
+    else if (it.type === 'clear') { p.clearRect(0, 0, W, H); }
+  }
+
+  // paint in the canvas area (below the palette bar)
+  if (hand && hand.y >= barH) {
     const cur = { x: hand.x, y: hand.y };
     if (paintLast) {
       const d = Math.hypot(cur.x - paintLast.x, cur.y - paintLast.y);
-      const steps = Math.min(30, Math.max(1, Math.floor(d / 8))); // fill gaps on fast moves
+      const spacing = Math.max(2, paintBrush * 0.3);
+      const steps = Math.min(80, Math.max(1, Math.floor(d / spacing)));
       for (let i = 1; i <= steps; i++) {
         const t = i / steps;
-        paintGlow(p, paintLast.x + (cur.x - paintLast.x) * t, paintLast.y + (cur.y - paintLast.y) * t, 26, hue, 0.5);
+        paintDab(p, paintLast.x + (cur.x - paintLast.x) * t, paintLast.y + (cur.y - paintLast.y) * t, paintBrush, paintColor, paintErase);
       }
     } else {
-      paintGlow(p, cur.x, cur.y, 26, hue, 0.5);
+      paintDab(p, cur.x, cur.y, paintBrush, paintColor, paintErase);
     }
     paintLast = cur;
-    if (Math.random() < 0.12) paintDrips.push({ x: cur.x, y: cur.y, vy: 15 + Math.random() * 35, hue, r: 8 + Math.random() * 6, life: 0 });
   } else {
     paintLast = null;
   }
 
-  // drips run down the wall, painting a fading streak
-  paintDrips = paintDrips.filter(dp => {
-    dp.vy += 45 * dt; dp.y += dp.vy * dt; dp.life += dt;
-    if (dp.y > H || dp.life > PAINT_FADE_SECONDS) return false;
-    paintGlow(p, dp.x, dp.y, dp.r, dp.hue, 0.22);
-    return true;
-  });
-  p.globalCompositeOperation = 'source-over';
-
-  ctx.fillStyle = '#05060a';
+  ctx.fillStyle = PAINT_WALL_COLOR;
   ctx.fillRect(0, 0, W, H);
   ctx.drawImage(paintLayer, 0, 0);
+  drawPaintPalette(now, items, barH, iw, hovered);
 }
 
 // ============================================================================
