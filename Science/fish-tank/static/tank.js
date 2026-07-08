@@ -1017,6 +1017,9 @@ let handMarkerHeading = 0;
 let handMarkerLastPos = null;
 
 function drawHandMarker(now) {
+  // The paint scene draws its own always-visible cursor (with dwell ring and
+  // pen state), so skip the generic marker there entirely.
+  if (currentScene === 'paint') return;
   // On the Pac-Man scene the marker follows the smoothed cursor (pmCursorPx),
   // which eases toward the hand when present and leads Pac-Man when it isn't -
   // and stays hidden until the first hand appears. Other scenes track the raw
@@ -1048,16 +1051,6 @@ function drawHandMarker(now) {
   if (currentScene === 'flowers') {
     const marker = { x: mx, y: my, maxRadius: 24 * pulse, petals: 6, color: HAND_MARKER_COLOR, kind: 'daisy', rotation: now * 0.6 };
     drawFlower(marker, 1, 0.85, 0);
-  } else if (currentScene === 'paint') {
-    // a brush ring showing the actual size and colour (or eraser)
-    const br = (typeof paintBrush !== 'undefined' ? paintBrush : 20);
-    ctx.save();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = paintErase ? '#333' : paintColor;
-    ctx.beginPath(); ctx.arc(mx, my, br, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = paintErase ? 'rgba(0,0,0,0.15)' : paintColor;
-    ctx.beginPath(); ctx.arc(mx, my, 3, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
   } else if (currentScene === 'constellation') {
     // a cool glowing star-cursor that hints at the next star to connect
     ctx.save();
@@ -1925,24 +1918,28 @@ function drawFishScene(now, dt) {
 }
 
 // ============================================================================
-// Paint wall: a real finger-painting tool. Paint is PERSISTENT (it stays so
-// you can build up a picture) on an offscreen layer. A palette bar across the
-// top lets you pick a colour, brush size, an eraser, or clear the wall - all
-// by hovering (dwelling) over an item, since a tracked hand has no "click".
-// Below the bar the hand paints; the bar doubles as a "move without painting"
-// safe zone. After a long idle with no hand, the wall auto-wipes for the next
-// person.
+// Paint wall: a real, PERSISTENT finger-painting tool. Because a tracked hand
+// has no physical click, "clicking" is done by DWELL - hold the cursor still
+// for a moment and a ring fills up to confirm. A dwell over a palette item
+// selects it; a dwell on the canvas toggles the PEN up/down, so you choose
+// when you're drawing vs just moving. The cursor is always on screen (it holds
+// its last position if tracking briefly drops). After a long idle the wall
+// auto-wipes for the next person.
 // ============================================================================
 let paintLayer = null, paintLayerCtx = null, paintLayerW = 0, paintLayerH = 0;
 let paintLast = null;
 let paintColor = '#1e88e5';
 let paintErase = false;
 let paintBrush = 28;
-let paintHoverItem = null, paintHoverStart = 0, paintHoverDone = false;
+let paintPenDown = false;
+let paintCursor = null;             // last known cursor position (kept visible on dropout)
+let dwellAnchor = null, dwellStart = 0, dwellArmed = false;
+let paintClickFlash = 0;            // time of last click, for a brief confirm pulse
 let paintLastHand = 0;
 const PAINT_WALL_COLOR = '#ece7dd';       // an off-white wall so colours read like paint
 const PAINT_COLORS = ['#e53935', '#fb8c00', '#fdd835', '#43a047', '#00acc1', '#1e88e5', '#5e35b1', '#d81b60', '#6d4c41', '#111111'];
-const PAINT_DWELL = 0.35;                 // seconds of hover to select a palette item
+const PAINT_DWELL_TIME = 0.6;             // seconds to hold still to "click"
+const PAINT_DWELL_RADIUS = 30;            // px; moving beyond this re-arms the dwell
 const PAINT_IDLE_CLEAR = 90;              // seconds with no hand -> auto-wipe
 
 function ensurePaintLayer() {
@@ -1982,6 +1979,22 @@ function paintDab(p, x, y, r, color, erase) {
   p.beginPath(); p.arc(x, y, r, 0, Math.PI * 2); p.fill();
 }
 
+// A dwell "click" landed at (x,y): pick a palette item, or toggle the pen.
+function paintClick(x, y, barH, items, iw) {
+  if (y < barH) {
+    const idx = Math.floor(x / iw);
+    if (idx < 0 || idx >= items.length) return;
+    const it = items[idx];
+    if (it.type === 'color') { paintColor = it.color; paintErase = false; }
+    else if (it.type === 'erase') { paintErase = true; }
+    else if (it.type === 'size') { paintBrush = it.size; }
+    else if (it.type === 'clear') { paintLayerCtx.clearRect(0, 0, W, H); }
+  } else {
+    paintPenDown = !paintPenDown; // start / stop drawing
+    paintLast = null;
+  }
+}
+
 function drawPaintPalette(now, items, barH, iw, hovered) {
   ctx.save();
   ctx.fillStyle = 'rgba(20,22,28,0.82)';
@@ -1993,6 +2006,7 @@ function drawPaintPalette(now, items, barH, iw, hovered) {
       || (it.type === 'erase' && paintErase)
       || (it.type === 'size' && it.size === paintBrush);
     if (selected) { ctx.fillStyle = 'rgba(255,255,255,0.16)'; ctx.fillRect(x + 2, 2, iw - 4, barH - 4); }
+    if (hovered === i) { ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 2; ctx.strokeRect(x + 2, 2, iw - 4, barH - 4); }
     if (it.type === 'color') {
       ctx.fillStyle = it.color;
       ctx.beginPath(); ctx.arc(cx, cy, Math.min(barH * 0.32, iw * 0.34), 0, Math.PI * 2); ctx.fill();
@@ -2006,14 +2020,43 @@ function drawPaintPalette(now, items, barH, iw, hovered) {
       ctx.fillStyle = '#ff6b6b'; ctx.font = `${Math.round(barH * 0.26)}px sans-serif`;
       ctx.fillText('Clear', cx, cy);
     }
-    if (hovered === i && !paintHoverDone) { // dwell-to-select progress
-      const prog = Math.min(1, (now - paintHoverStart) / PAINT_DWELL);
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 4;
-      ctx.beginPath(); ctx.moveTo(x + 3, barH - 3); ctx.lineTo(x + 3 + (iw - 6) * prog, barH - 3); ctx.stroke();
-    }
   }
   ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, barH); ctx.lineTo(W, barH); ctx.stroke();
+  ctx.restore();
+}
+
+// Always-visible cursor: a brush ring in the current colour, filled when the
+// pen is down, with a dwell-progress ring that fills as you hold still.
+function drawPaintCursor(now, dwellProgress, live) {
+  if (!paintCursor) return;
+  const { x, y } = paintCursor;
+  ctx.save();
+  ctx.globalAlpha = live ? 1 : 0.4; // dim but still visible if tracking dropped
+  const col = paintErase ? '#444' : paintColor;
+  if (paintPenDown && !paintErase) {
+    ctx.globalAlpha = (live ? 1 : 0.4) * 0.35;
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(x, y, paintBrush, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = live ? 1 : 0.4;
+  }
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = col;
+  ctx.beginPath(); ctx.arc(x, y, paintBrush, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = col;
+  ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill();
+  if (dwellProgress > 0) {
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.arc(x, y, paintBrush + 10, -Math.PI / 2, -Math.PI / 2 + dwellProgress * Math.PI * 2);
+    ctx.stroke();
+  }
+  if (now - paintClickFlash < 0.25) { // confirm pulse
+    ctx.globalAlpha = 1 - (now - paintClickFlash) / 0.25;
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(x, y, paintBrush + 18, 0, Math.PI * 2); ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -2026,37 +2069,43 @@ function drawPaintScene(now, dt) {
 
   // auto-wipe after a long idle so it's fresh for the next person
   if (hand) paintLastHand = now;
-  if (paintLastHand && now - paintLastHand > PAINT_IDLE_CLEAR) { p.clearRect(0, 0, W, H); paintLastHand = now; }
+  if (paintLastHand && now - paintLastHand > PAINT_IDLE_CLEAR) { p.clearRect(0, 0, W, H); paintLastHand = now; paintPenDown = false; }
 
-  // palette: dwell over an item (in the top bar) to select it
-  let hovered = null;
-  if (hand && hand.y < barH) {
-    const idx = Math.floor(hand.x / iw);
-    if (idx >= 0 && idx < items.length) hovered = idx;
-  }
-  if (hovered !== paintHoverItem) { paintHoverItem = hovered; paintHoverStart = now; paintHoverDone = false; }
-  if (hovered !== null && !paintHoverDone && now - paintHoverStart > PAINT_DWELL) {
-    paintHoverDone = true; // fires once per hover entry
-    const it = items[hovered];
-    if (it.type === 'color') { paintColor = it.color; paintErase = false; }
-    else if (it.type === 'erase') { paintErase = true; }
-    else if (it.type === 'size') { paintBrush = it.size; }
-    else if (it.type === 'clear') { p.clearRect(0, 0, W, H); }
+  // --- dwell "click": hold the hand still to trigger ---
+  let dwellProgress = 0;
+  if (hand) {
+    paintCursor = { x: hand.x, y: hand.y };
+    if (!dwellAnchor || Math.hypot(hand.x - dwellAnchor.x, hand.y - dwellAnchor.y) > PAINT_DWELL_RADIUS) {
+      dwellAnchor = { x: hand.x, y: hand.y }; dwellStart = now; dwellArmed = true;
+    } else if (dwellArmed) {
+      dwellProgress = Math.min(1, (now - dwellStart) / PAINT_DWELL_TIME);
+      if (dwellProgress >= 1) {
+        dwellArmed = false; // fire once; re-arms only after moving out of the radius
+        paintClickFlash = now;
+        paintClick(dwellAnchor.x, dwellAnchor.y, barH, items, iw);
+      }
+    }
+  } else {
+    dwellAnchor = null; dwellArmed = false;
   }
 
-  // paint in the canvas area (below the palette bar)
-  if (hand && hand.y >= barH) {
+  const hovered = (hand && hand.y < barH) ? Math.floor(hand.x / iw) : null;
+
+  // paint only while the pen is down, below the bar, and actually moving
+  if (paintPenDown && hand && hand.y >= barH) {
     const cur = { x: hand.x, y: hand.y };
     if (paintLast) {
       const d = Math.hypot(cur.x - paintLast.x, cur.y - paintLast.y);
-      const spacing = Math.max(2, paintBrush * 0.3);
-      const steps = Math.min(80, Math.max(1, Math.floor(d / spacing)));
-      for (let i = 1; i <= steps; i++) {
-        const t = i / steps;
-        paintDab(p, paintLast.x + (cur.x - paintLast.x) * t, paintLast.y + (cur.y - paintLast.y) * t, paintBrush, paintColor, paintErase);
+      if (d > 0.5) {
+        const spacing = Math.max(2, paintBrush * 0.3);
+        const steps = Math.min(80, Math.max(1, Math.floor(d / spacing)));
+        for (let i = 1; i <= steps; i++) {
+          const t = i / steps;
+          paintDab(p, paintLast.x + (cur.x - paintLast.x) * t, paintLast.y + (cur.y - paintLast.y) * t, paintBrush, paintColor, paintErase);
+        }
       }
     } else {
-      paintDab(p, cur.x, cur.y, paintBrush, paintColor, paintErase);
+      paintDab(p, cur.x, cur.y, paintBrush, paintColor, paintErase); // dot at pen-down
     }
     paintLast = cur;
   } else {
@@ -2066,7 +2115,20 @@ function drawPaintScene(now, dt) {
   ctx.fillStyle = PAINT_WALL_COLOR;
   ctx.fillRect(0, 0, W, H);
   ctx.drawImage(paintLayer, 0, 0);
-  drawPaintPalette(now, items, barH, iw, hovered);
+  drawPaintPalette(now, items, barH, iw, (hovered !== null && hovered >= 0 && hovered < items.length) ? hovered : null);
+
+  // status hint
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.font = `${Math.round(barH * 0.28)}px sans-serif`;
+  ctx.fillStyle = paintPenDown ? 'rgba(30,120,40,0.9)' : 'rgba(60,60,60,0.75)';
+  const hint = !paintCursor ? 'Move your hand to begin'
+    : paintPenDown ? 'DRAWING - hold still to lift the pen'
+      : 'Hold still to start drawing, or on a palette item to pick it';
+  ctx.fillText(hint, W / 2, H - Math.max(16, barH * 0.35));
+  ctx.restore();
+
+  drawPaintCursor(now, dwellProgress, !!hand);
 }
 
 // ============================================================================
