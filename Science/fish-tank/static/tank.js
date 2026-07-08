@@ -2029,36 +2029,58 @@ function drawPaintPalette(now, items, barH, iw, hovered) {
   ctx.restore();
 }
 
-// Always-visible cursor: a brush ring in the current colour, filled when the
-// pen is down, with a dwell-progress ring that fills as you hold still.
+// Always-visible cursor drawn as an actual PEN: a light body with a dark
+// outline (so it shows up on any colour) and a nib tinted with the current
+// paint colour. A high-contrast ring at the tip shows the brush size, and a
+// ring fills as you hold still (dwell). The tip sits exactly where paint lands.
 function drawPaintCursor(now, dwellProgress, live) {
   if (!paintCursor) return;
   const { x, y } = paintCursor;
+  const col = paintErase ? '#777' : paintColor;
   ctx.save();
-  ctx.globalAlpha = live ? 1 : 0.4; // dim but still visible if tracking dropped
-  const col = paintErase ? '#444' : paintColor;
+  ctx.globalAlpha = live ? 1 : 0.45; // dim but still visible if tracking dropped
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+
+  // brush-size footprint ring at the tip (double-stroked dark+white for contrast)
   if (paintPenDown && !paintErase) {
-    ctx.globalAlpha = (live ? 1 : 0.4) * 0.35;
-    ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(x, y, paintBrush, 0, Math.PI * 2); ctx.fill();
-    ctx.globalAlpha = live ? 1 : 0.4;
+    ctx.save(); ctx.globalAlpha *= 0.35; ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(x, y, paintBrush, 0, Math.PI * 2); ctx.fill(); ctx.restore();
   }
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = col;
+  ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(0,0,0,0.6)';
   ctx.beginPath(); ctx.arc(x, y, paintBrush, 0, Math.PI * 2); ctx.stroke();
-  ctx.fillStyle = col;
-  ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill();
+  ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+  ctx.beginPath(); ctx.arc(x, y, paintBrush, 0, Math.PI * 2); ctx.stroke();
+
+  // the pen: tip at (x,y), body angled up and to the right
+  const ax = Math.SQRT1_2, ay = -Math.SQRT1_2;            // axis (up-right)
+  const at = (d, w) => ({ x: x + ax * d - ay * w, y: y + ay * d + ax * w }); // along axis / perpendicular
+  const hw = 8, nib = 20, cap = 58;
+  const nL = at(nib, hw), nR = at(nib, -hw), bL = at(cap, hw), bR = at(cap, -hw);
+
+  ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+  // body (light metal)
+  ctx.beginPath(); ctx.moveTo(nL.x, nL.y); ctx.lineTo(bL.x, bL.y); ctx.lineTo(bR.x, bR.y); ctx.lineTo(nR.x, nR.y); ctx.closePath();
+  ctx.fillStyle = '#f4f4f6'; ctx.fill(); ctx.stroke();
+  // nib (cone) in the current colour
+  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(nL.x, nL.y); ctx.lineTo(nR.x, nR.y); ctx.closePath();
+  ctx.fillStyle = col; ctx.fill(); ctx.stroke();
+  // a crisp point exactly where paint lands
+  ctx.fillStyle = 'rgba(0,0,0,0.9)';
+  ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+
+  // dwell-to-click progress ring (dark backing + white arc)
   if (dwellProgress > 0) {
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 5;
-    ctx.beginPath();
-    ctx.arc(x, y, paintBrush + 10, -Math.PI / 2, -Math.PI / 2 + dwellProgress * Math.PI * 2);
-    ctx.stroke();
+    const rr = paintBrush + 12;
+    ctx.lineWidth = 7; ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.beginPath(); ctx.arc(x, y, rr, -Math.PI / 2, -Math.PI / 2 + dwellProgress * Math.PI * 2); ctx.stroke();
+    ctx.lineWidth = 4; ctx.strokeStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(x, y, rr, -Math.PI / 2, -Math.PI / 2 + dwellProgress * Math.PI * 2); ctx.stroke();
   }
   if (now - paintClickFlash < 0.25) { // confirm pulse
-    ctx.globalAlpha = 1 - (now - paintClickFlash) / 0.25;
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(x, y, paintBrush + 18, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = (live ? 1 : 0.45) * (1 - (now - paintClickFlash) / 0.25);
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(x, y, paintBrush + 22, 0, Math.PI * 2); ctx.stroke();
   }
   ctx.restore();
 }
