@@ -15,6 +15,8 @@ const WANDER_SWAY_FREQ = 0.6;   // radians/sec - speed of the side-to-side sway
 const WANDER_SWAY_AMOUNT = 0.9; // radians - how wide the sway is
 const MAX_TURN_RATE = Math.PI * 1.4; // radians/sec - caps how fast the sprite can visually turn
 const FISH_MOODS = ['dance', 'dart', 'wiggle', 'hop']; // spontaneous joyful behaviours
+const FLOCK_RADIUS = 200;      // neighbours within this distance influence a fish
+const FLOCK_SEP_RADIUS = 92;   // personal space
 
 let W = window.innerWidth;
 let H = window.innerHeight;
@@ -53,19 +55,61 @@ function getImage(src) {
   return imageCache[src];
 }
 
+function shade(hex, f) {
+  var h = hex.charAt(0) === '#' ? hex.slice(1) : hex;
+  if (h.length !== 6) return hex;
+  var r = Math.min(255, Math.round(parseInt(h.slice(0, 2), 16) * f));
+  var g = Math.min(255, Math.round(parseInt(h.slice(2, 4), 16) * f));
+  var b = Math.min(255, Math.round(parseInt(h.slice(4, 6), 16) * f));
+  return 'rgb(' + r + ',' + g + ',' + b + ')';
+}
+
 function proceduralSprite(color) {
-  const w = FISH_LENGTH, h = Math.round(FISH_LENGTH * 0.6);
+  // A shaded, finned fish drawn facing RIGHT; draw() flips it to face travel.
+  const w = Math.round(FISH_LENGTH * 1.35), h = Math.round(FISH_LENGTH * 0.82);
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const g = c.getContext('2d');
-  g.fillStyle = color;
+  const cy = h * 0.5;
+  const fin = shade(color, 0.72);
+  g.fillStyle = fin;
+  // tail fin
   g.beginPath();
-  g.moveTo(w * 0.15, h * 0.5); g.lineTo(w * 0.55, h * 0.1); g.lineTo(w * 0.92, h * 0.3);
-  g.lineTo(w * 0.92, h * 0.7); g.lineTo(w * 0.55, h * 0.9); g.closePath(); g.fill();
+  g.moveTo(w * 0.16, cy);
+  g.lineTo(w * 0.01, cy - h * 0.30);
+  g.quadraticCurveTo(w * 0.13, cy, w * 0.01, cy + h * 0.30);
+  g.closePath(); g.fill();
+  // dorsal fin
   g.beginPath();
-  g.moveTo(w * 0.15, h * 0.5); g.lineTo(0, h * 0.1); g.lineTo(0, h * 0.9); g.closePath(); g.fill();
-  g.fillStyle = '#141414';
-  g.beginPath(); g.arc(w * 0.75, h * 0.35, 4, 0, Math.PI * 2); g.fill();
+  g.moveTo(w * 0.34, cy - h * 0.28);
+  g.quadraticCurveTo(w * 0.55, cy - h * 0.54, w * 0.70, cy - h * 0.20);
+  g.closePath(); g.fill();
+  // pelvic fin
+  g.beginPath();
+  g.moveTo(w * 0.48, cy + h * 0.20);
+  g.quadraticCurveTo(w * 0.56, cy + h * 0.44, w * 0.66, cy + h * 0.18);
+  g.closePath(); g.fill();
+  // body with vertical gradient
+  const grad = g.createLinearGradient(0, cy - h * 0.4, 0, cy + h * 0.4);
+  grad.addColorStop(0, shade(color, 1.28));
+  grad.addColorStop(0.55, color);
+  grad.addColorStop(1, shade(color, 0.72));
+  g.fillStyle = grad;
+  g.beginPath();
+  g.moveTo(w * 0.16, cy);
+  g.quadraticCurveTo(w * 0.46, cy - h * 0.44, w * 0.90, cy);
+  g.quadraticCurveTo(w * 0.46, cy + h * 0.44, w * 0.16, cy);
+  g.closePath(); g.fill();
+  // belly sheen
+  g.fillStyle = 'rgba(255,255,255,0.14)';
+  g.beginPath(); g.ellipse(w * 0.52, cy + h * 0.13, w * 0.26, h * 0.11, 0, 0, Math.PI * 2); g.fill();
+  // gill arc
+  g.strokeStyle = 'rgba(0,0,0,0.18)'; g.lineWidth = Math.max(1, h * 0.02);
+  g.beginPath(); g.arc(w * 0.70, cy, h * 0.24, -0.7, 0.7); g.stroke();
+  // eye
+  g.fillStyle = '#fff'; g.beginPath(); g.arc(w * 0.82, cy - h * 0.09, h * 0.085, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#10151c'; g.beginPath(); g.arc(w * 0.835, cy - h * 0.09, h * 0.045, 0, Math.PI * 2); g.fill();
+  g.fillStyle = 'rgba(255,255,255,0.9)'; g.beginPath(); g.arc(w * 0.815, cy - h * 0.12, h * 0.018, 0, Math.PI * 2); g.fill();
   return c;
 }
 
@@ -98,6 +142,8 @@ class Fish {
     this.mood = null;      // current spontaneous mood (dance/dart/wiggle/hop)
     this.moodUntil = 0;
     this.nextMoodAt = 0;
+    this.alpha = 0;        // fade-in on spawn
+    this.leaving = false;  // fade-out then cull when rotated out
   }
 
   steerToward(target, maxSpeed, arriveRadius) {
@@ -167,6 +213,29 @@ class Fish {
       }
     }
 
+    // --- always keep personal space; loosely school by temperament ---
+    let coh = { x: 0, y: 0 }, ali = { x: 0, y: 0 }, sep = { x: 0, y: 0 }, nNb = 0, near = false;
+    for (const other of fishes) {
+      if (other === this) continue;
+      const d = dist(this.pos, other.pos);
+      if (d < FLOCK_RADIUS) { coh = add(coh, other.pos); ali = add(ali, other.vel); nNb++; }
+      if (d < FLOCK_SEP_RADIUS && d > 1e-3) {
+        const push = (FLOCK_SEP_RADIUS - d) / FLOCK_SEP_RADIUS;   // 0..1, ramps up as they close in
+        sep = add(sep, scale(norm(sub(this.pos, other.pos)), push * push));
+        near = true;
+      }
+    }
+    const social = this.temperament === 'seek' ? 1 : 0.3;
+    if (nNb > 0) {
+      steer = add(steer, scale(sub(scale(coh, 1 / nNb), this.pos), 0.10 * social));      // cohesion
+      steer = add(steer, scale(sub(scale(ali, 1 / nNb), this.vel), 0.30 * social));      // alignment
+    }
+    if (near) {
+      // personal space always wins - fish never overlap, even mid-chase
+      steer = add(steer, scale(sep, this.temperament === 'flee' ? 900 : 640));
+      maxSpeed = Math.max(maxSpeed, 170);
+    }
+
     if (this.pos.x < EDGE_MARGIN) steer.x += (EDGE_MARGIN - this.pos.x) * 4;
     else if (this.pos.x > W - EDGE_MARGIN) steer.x -= (this.pos.x - (W - EDGE_MARGIN)) * 4;
     if (this.pos.y < EDGE_MARGIN) steer.y += (EDGE_MARGIN - this.pos.y) * 4;
@@ -184,6 +253,7 @@ class Fish {
       diff = Math.max(-maxStep, Math.min(maxStep, diff));
       this.heading += diff;
     }
+    this.alpha = this.leaving ? Math.max(0, this.alpha - dt / 1.2) : Math.min(1, this.alpha + dt / 1.2);
   }
 
   draw(now = 0) {
@@ -200,9 +270,14 @@ class Fish {
       const s = 1 + Math.sin(now * 8) * 0.08;
       sx = s; sy = s;
     }
+    // side-view: face the travel direction (horizontal flip), gentle pitch
+    const faceRight = Math.cos(angle) >= 0;
+    const tilt = Math.max(-0.6, Math.min(0.6, Math.sin(angle))) * 0.35;
     ctx.save();
+    ctx.globalAlpha = this.alpha;
     ctx.translate(this.pos.x, this.pos.y + bob);
-    ctx.rotate(angle);
+    ctx.scale(faceRight ? 1 : -1, 1);
+    ctx.rotate(faceRight ? tilt : -tilt);
     ctx.scale(sx, sy);
     ctx.drawImage(img, -iw / 2, -ih / 2, iw, ih);
     ctx.restore();
@@ -216,13 +291,15 @@ async function syncFishList() {
   try {
     const res = await fetch('/api/fish');
     const roster = await res.json();
-    const currentIds = new Set(roster.map(e => e.id));
-    fishes = fishes.filter(f => currentIds.has(f.id));
+    const activeIds = new Set(roster.map(e => e.id));
+    for (const f of fishes) { if (!activeIds.has(f.id)) f.leaving = true; }
+    fishes = fishes.filter(f => !(f.leaving && f.alpha <= 0.02));
     fishById = Object.fromEntries(fishes.map(f => [f.id, f]));
     for (const entry of roster) {
       const existing = fishById[entry.id];
       if (existing) {
         existing.temperament = entry.temperament;
+        existing.leaving = false;
       } else {
         const f = new Fish(entry);
         fishes.push(f);
