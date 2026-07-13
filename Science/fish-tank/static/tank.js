@@ -274,6 +274,36 @@ function randomKind() {
   return FLOWER_KINDS[Math.floor(Math.random() * FLOWER_KINDS.length)];
 }
 
+// Green foliage that grows alongside the blooms (teamLab "Flower Forest" feel).
+const LEAF_COLORS = ['#2f8f4e', '#3fa34d', '#4caf50', '#2e7d4f', '#57b368'];
+function randomLeaves(min = 2, max = 3) {
+  const n = min + Math.floor(Math.random() * (max - min + 1));
+  const leaves = [];
+  for (let i = 0; i < n; i++) {
+    leaves.push({
+      angle: Math.random() * Math.PI * 2,
+      len: 0.9 + Math.random() * 0.8,     // multiple of the flower radius
+      width: 0.26 + Math.random() * 0.14,
+      color: LEAF_COLORS[Math.floor(Math.random() * LEAF_COLORS.length)],
+    });
+  }
+  return leaves;
+}
+
+// A single leaf blade pointing along +x from the current origin.
+function drawLeafBlade(len, width, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.quadraticCurveTo(len * 0.5, -width, len, 0);
+  ctx.quadraticCurveTo(len * 0.5, width, 0, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+  ctx.lineWidth = Math.max(0.5, width * 0.18);
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(len, 0); ctx.stroke();
+}
+
 function makeIntroFlowers(count) {
   const flowers = [];
   for (let i = 0; i < count; i++) {
@@ -286,6 +316,7 @@ function makeIntroFlowers(count) {
       kind: randomKind(),
       delay: Math.random() * INTRO_MAX_DELAY,
       rotation: Math.random() * Math.PI * 2,
+      leaves: randomLeaves(),
     });
   }
   return flowers;
@@ -326,6 +357,20 @@ function drawFlower(f, growth, alpha = 1, wobble = 0, face = null) {
   ctx.globalAlpha = alpha;
   ctx.translate(f.x, f.y);
   ctx.rotate(f.rotation + wobble);
+
+  // leaves fan out behind the petals
+  if (f.leaves) {
+    for (const lf of f.leaves) {
+      ctx.save();
+      ctx.rotate(lf.angle);
+      ctx.strokeStyle = lf.color;
+      ctx.lineWidth = Math.max(1, r * 0.04);
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(r * lf.len * 0.4, 0); ctx.stroke(); // little stem
+      ctx.translate(r * lf.len * 0.35, 0);
+      drawLeafBlade(r * lf.len * 0.7, r * lf.width, lf.color);
+      ctx.restore();
+    }
+  }
 
   if (f.kind === 'star') {
     for (let p = 0; p < f.petals; p++) {
@@ -443,6 +488,7 @@ function makeGardenFlower(now, x, y) {
     bornAt: now,
     hold: 2.5 + Math.random() * 3,
     fade: 1.6 + Math.random() * 1.0,
+    leaves: randomLeaves(),
   };
 }
 
@@ -624,30 +670,49 @@ function updateAndDrawSparkles(dt) {
 // --- drifting petals: gentle ambient motion so the whole frame feels alive ---
 let petals = [];
 function makePetal(y) {
+  const isLeaf = Math.random() < 0.4; // some drifting bits are green leaves, not petals
   return {
     x: Math.random() * W,
     y: y !== undefined ? y : -10,
-    vy: 8 + Math.random() * 20,
+    vy: (isLeaf ? 12 : 8) + Math.random() * 18,
     drift: (Math.random() - 0.5) * 26,
     seed: Math.random() * Math.PI * 2,
-    r: 2.5 + Math.random() * 3.5,
-    color: FLOWER_COLORS[Math.floor(Math.random() * FLOWER_COLORS.length)],
+    spin: (Math.random() - 0.5) * 1.6,
+    r: (isLeaf ? 5 : 2.5) + Math.random() * 3.5,
+    isLeaf,
+    color: isLeaf
+      ? LEAF_COLORS[Math.floor(Math.random() * LEAF_COLORS.length)]
+      : FLOWER_COLORS[Math.floor(Math.random() * FLOWER_COLORS.length)],
   };
 }
 function initPetals() {
   petals = [];
-  for (let i = 0; i < 30; i++) petals.push(makePetal(Math.random() * H));
+  for (let i = 0; i < 40; i++) petals.push(makePetal(Math.random() * H));
 }
 function drawPetals(now, dt) {
-  ctx.globalAlpha = 0.5;
+  ctx.globalAlpha = 0.55;
   for (const p of petals) {
     p.y += p.vy * dt;
     p.x += Math.sin(now * 0.8 + p.seed) * p.drift * dt;
-    if (p.y > H + 10) Object.assign(p, makePetal(-10));
+    if (p.y > H + 12) Object.assign(p, makePetal(-10));
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(now * p.spin + p.seed);
     ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.ellipse(p.x, p.y, p.r, p.r * 0.55, now * 0.5 + p.seed, 0, Math.PI * 2);
-    ctx.fill();
+    if (p.isLeaf) {
+      const ll = p.r * 2.4, lw = p.r;
+      ctx.beginPath();
+      ctx.moveTo(-ll * 0.4, 0);
+      ctx.quadraticCurveTo(0, -lw, ll * 0.6, 0);
+      ctx.quadraticCurveTo(0, lw, -ll * 0.4, 0);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.ellipse(0, 0, p.r, p.r * 0.55, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
   ctx.globalAlpha = 1;
 }
@@ -705,6 +770,67 @@ function drawGrass(now) {
     const tipX = b.x + (sway * 1.6 + b.lean) * b.height * 0.7;
     ctx.quadraticCurveTo(midX, baseline - b.height * 0.55, tipX, baseline - b.height);
     ctx.stroke();
+  }
+}
+
+// --- climbing leafy vines: tall foliage that sways up behind the flowers,
+// giving the immersive "growing forest" feel of the teamLab flower room.
+let vines = [];
+function initVines() {
+  vines = [];
+  const count = Math.max(6, Math.floor(W / 240));
+  for (let i = 0; i < count; i++) {
+    const segs = 10;
+    const leafCount = 4 + Math.floor(Math.random() * 4);
+    const leaves = [];
+    for (let l = 0; l < leafCount; l++) {
+      leaves.push({
+        t: 0.25 + Math.random() * 0.7,     // position up the vine
+        side: Math.random() < 0.5 ? 1 : -1,
+        size: 12 + Math.random() * 16,
+        color: LEAF_COLORS[Math.floor(Math.random() * LEAF_COLORS.length)],
+      });
+    }
+    vines.push({
+      x: (i + 0.5) / count * W + (Math.random() - 0.5) * 130,
+      height: 200 + Math.random() * 280,
+      sway: 16 + Math.random() * 18,
+      phase: Math.random() * Math.PI * 2,
+      width: 3 + Math.random() * 3,
+      color: LEAF_COLORS[Math.floor(Math.random() * LEAF_COLORS.length)],
+      segs,
+      leaves,
+    });
+  }
+}
+
+function drawVines(now) {
+  const baseline = H - 4;
+  ctx.lineCap = 'round';
+  for (const v of vines) {
+    const pts = [];
+    for (let s = 0; s <= v.segs; s++) {
+      const t = s / v.segs;
+      const y = baseline - t * v.height;
+      const x = v.x + Math.sin(now * 0.7 + v.phase + t * 2.5) * v.sway * t;
+      pts.push({ x, y });
+    }
+    ctx.strokeStyle = v.color;
+    ctx.lineWidth = v.width;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let s = 1; s < pts.length; s++) ctx.lineTo(pts[s].x, pts[s].y);
+    ctx.stroke();
+    for (const lf of v.leaves) {
+      const idx = Math.min(v.segs - 1, Math.floor(lf.t * v.segs));
+      const p = pts[idx], p2 = pts[idx + 1];
+      const ang = Math.atan2(p2.y - p.y, p2.x - p.x);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(ang + lf.side * 1.0);
+      drawLeafBlade(lf.size, lf.size * 0.42, lf.color);
+      ctx.restore();
+    }
   }
 }
 
@@ -821,11 +947,13 @@ function drawFlowerScene(now, dt) {
     initGrass();
     initButterflies();
     initPetals();
+    initVines();
   }
 
   ctx.fillStyle = '#03121f';
   ctx.fillRect(0, 0, W, H);
   drawPetals(now, dt);
+  drawVines(now);   // leafy foliage rising behind the blooms
   drawGrass(now);
 
   if (gardenFlowers.length < GARDEN_TARGET_COUNT && now - lastGardenSpawnCheck > GARDEN_SPAWN_CHECK_SECONDS) {
