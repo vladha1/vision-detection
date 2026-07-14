@@ -1,115 +1,141 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Pac-Man Controller</title>
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Fish Tank &middot; Controller</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <style>
-  :root {
-    --bg: #0e1420;
-    --panel: #171f30;
-    --panel-2: #1f2a40;
-    --accent: #ffd23f;
-    --text: #e8edf5;
-    --muted: #8b97ab;
-  }
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; touch-action: manipulation; user-select: none; }
-  html, body { height: 100%; overscroll-behavior: none; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: linear-gradient(180deg, var(--bg), #0a0f18);
-    color: var(--text);
-    margin: 0;
-    padding: 18px 16px 28px;
-    min-height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: 0.3px; }
-  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; text-align: center; }
+  :root{--bg0:#070b14;--bg1:#0c1526;--panel:rgba(255,255,255,.05);--brd:rgba(255,255,255,.1);
+    --text:#eaf1fb;--muted:#8ea0bd;--accent:#49b6ff;--accent2:#7a5cff;--good:#3ddc84;--pac:#ffd23f;}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;touch-action:manipulation;user-select:none;-webkit-user-select:none;}
+  html,body{height:100%;overscroll-behavior:none;margin:0;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:var(--text);
+    background:radial-gradient(900px 500px at 20% -10%,#16305a55,transparent 60%),linear-gradient(180deg,var(--bg1),var(--bg0));
+    height:100vh;height:100dvh;display:flex;flex-direction:column;align-items:center;
+    padding:calc(4px + env(safe-area-inset-top)) max(8px,env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left));}
+  header{text-align:center;margin:2px 0 8px;flex:none;}
+  header h1{font-size:16px;margin:0;font-weight:700;letter-spacing:-.01em;}
+  header .scene{color:var(--muted);font-size:12px;margin-top:1px;}
+  header .scene b{color:var(--accent);text-transform:capitalize;}
 
-  .mode-toggle {
-    width: 100%; max-width: 360px; margin-bottom: 18px; padding: 14px;
-    border: 2px solid #33415f; border-radius: 14px; background: var(--panel-2);
-    color: var(--text); font-size: 16px; font-weight: 700; cursor: pointer;
-    transition: all 0.15s;
-  }
-  .mode-toggle.on { background: #123a2a; border-color: #3ddc84; color: #3ddc84; }
+  /* --- touch pad: fill essentially the whole screen --- */
+  #touch{position:relative;width:100%;flex:1;min-height:0;display:flex;}
+  #pad{position:relative;flex:1;width:100%;min-height:0;border:1px solid var(--brd);border-radius:20px;
+    background:radial-gradient(120% 120% at 50% 0%,#0e2c4d,#0a1b30);overflow:hidden;touch-action:none;
+    box-shadow:inset 0 0 60px #00000055,0 10px 40px #0006;}
+  #dot{position:absolute;width:52px;height:52px;margin:-26px 0 0 -26px;border-radius:50%;
+    background:radial-gradient(circle at 35% 35%,#bfe6ff,var(--accent));box-shadow:0 0 28px var(--accent);
+    opacity:0;transition:opacity .12s;pointer-events:none;}
+  #padhint{position:absolute;left:0;right:0;bottom:10px;color:var(--muted);font-size:13px;text-align:center;
+    pointer-events:none;text-shadow:0 1px 5px #000;}
 
-  .scoreboard {
-    display: flex; gap: 12px; width: 100%; max-width: 360px; margin-bottom: 26px;
-    opacity: 0.4; transition: opacity 0.15s;
-  }
-  .scoreboard.live { opacity: 1; }
-  .dpad { opacity: 0.4; transition: opacity 0.15s; pointer-events: none; }
-  .dpad.live { opacity: 1; pointer-events: auto; }
-  .stat {
-    flex: 1; background: var(--panel); border: 1px solid #263049; border-radius: 14px;
-    padding: 12px; text-align: center;
-  }
-  .stat .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }
-  .stat .value { font-size: 30px; font-weight: 800; margin-top: 2px; }
-
-  .dpad {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    grid-template-rows: repeat(3, 1fr);
-    gap: 14px;
-    width: min(96vw, 440px);
-    height: min(96vw, 440px);
-    margin-top: 6px;
-  }
-  .dpad button {
-    border: none; border-radius: 22px; background: var(--panel-2); color: var(--accent);
-    font-size: 64px; font-weight: 900; cursor: pointer; display: flex; align-items: center; justify-content: center;
-    transition: transform 0.05s, background 0.1s; touch-action: none;
-  }
-  .dpad button:active, .dpad button.held { background: var(--accent); color: #101010; transform: scale(0.94); }
-  .up    { grid-column: 2; grid-row: 1; }
-  .left  { grid-column: 1; grid-row: 2; }
-  .right { grid-column: 3; grid-row: 2; }
-  .down  { grid-column: 2; grid-row: 3; }
-  .hub {
-    grid-column: 2; grid-row: 2; border-radius: 50%;
-    background: #101623; border: 2px solid #263049;
-  }
-
-  .reset-btn {
-    margin-top: 22px; padding: 12px 26px; border-radius: 12px;
-    border: 1px solid #33415f; background: var(--panel); color: var(--muted);
-    font-size: 15px; font-weight: 700; cursor: pointer;
-  }
-  .reset-btn:active { background: #3a1414; border-color: var(--flee, #ff6b6b); color: #ff6b6b; }
-
-  #status { margin-top: 14px; font-size: 13px; color: var(--muted); min-height: 18px; text-align: center; }
-  #status.on { color: #3ddc84; }
+  /* --- pacman --- */
+  #pac{width:100%;max-width:420px;display:none;flex-direction:column;align-items:center;}
+  .toggle{width:100%;padding:14px;border:1px solid var(--brd);border-radius:14px;background:var(--panel);
+    color:var(--text);font-size:16px;font-weight:700;cursor:pointer;margin-bottom:16px;}
+  .toggle.on{background:#123a2a;border-color:var(--good);color:var(--good);}
+  .board{display:flex;gap:10px;width:100%;margin-bottom:20px;opacity:.4;transition:.15s;}
+  .board.live{opacity:1;}
+  .stat{flex:1;background:var(--panel);border:1px solid var(--brd);border-radius:14px;padding:11px;text-align:center;}
+  .stat .l{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px;}
+  .stat .v{font-size:28px;font-weight:800;}
+  .dpad{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);gap:12px;
+    width:min(92vw,400px);height:min(92vw,400px);}
+  .dpad button{border:none;border-radius:20px;background:var(--panel);color:var(--pac);font-size:52px;font-weight:900;
+    cursor:pointer;display:flex;align-items:center;justify-content:center;touch-action:none;transition:transform .05s,background .1s;}
+  .dpad button:active{background:var(--pac);color:#101010;transform:scale(.94);}
+  .up{grid-column:2;grid-row:1;}.left{grid-column:1;grid-row:2;}.right{grid-column:3;grid-row:2;}.down{grid-column:2;grid-row:3;}
+  .hub{grid-column:2;grid-row:2;border-radius:50%;background:#0b1220;border:1px solid var(--brd);}
+  .reset{margin-top:20px;padding:12px 26px;border-radius:12px;border:1px solid var(--brd);background:var(--panel);
+    color:var(--muted);font-size:15px;font-weight:700;cursor:pointer;}
 </style>
 </head>
 <body>
-  <h1>Pac-Man Controller</h1>
-  <div class="sub">Take control to play with the buttons below</div>
+  <header>
+    <h1>Fish Tank Controller</h1>
+    <div class="scene">Scene: <b id="sceneName">…</b></div>
+  </header>
 
-  <button id="modeToggle" class="mode-toggle">Take control</button>
-
-  <div class="scoreboard">
-    <div class="stat"><div class="label">Score</div><div class="value" id="score">0</div></div>
-    <div class="stat"><div class="label">Level</div><div class="value" id="level">1</div></div>
-    <div class="stat"><div class="label">Lives</div><div class="value" id="lives">3</div></div>
+  <!-- touch pad (fish / paint / stars / …) -->
+  <div id="touch">
+    <div id="pad"><div id="dot"></div></div>
+    <div id="padhint">Touch &amp; drag on the pad</div>
   </div>
 
-  <div class="dpad">
-    <button class="up"    data-dir="up"    aria-label="Up">&#9650;</button>
-    <button class="left"  data-dir="left"  aria-label="Left">&#9664;</button>
-    <div class="hub"></div>
-    <button class="right" data-dir="right" aria-label="Right">&#9654;</button>
-    <button class="down"  data-dir="down"  aria-label="Down">&#9660;</button>
+  <!-- pac-man -->
+  <div id="pac">
+    <button id="toggle" class="toggle">Take control</button>
+    <div class="board" id="board">
+      <div class="stat"><div class="l">Score</div><div class="v" id="score">0</div></div>
+      <div class="stat"><div class="l">Level</div><div class="v" id="level">1</div></div>
+      <div class="stat"><div class="l">Lives</div><div class="v" id="lives">3</div></div>
+    </div>
+    <div class="dpad">
+      <button class="up" data-dir="up">&#9650;</button>
+      <button class="left" data-dir="left">&#9664;</button>
+      <div class="hub"></div>
+      <button class="right" data-dir="right">&#9654;</button>
+      <button class="down" data-dir="down">&#9660;</button>
+    </div>
+    <button class="reset" id="reset">Reset game</button>
   </div>
 
-  <button id="resetBtn" class="reset-btn">Reset game</button>
+<script>
+var CFG={width:1280,height:800,playable_height:800};
+fetch('/api/config').then(function(r){return r.json();}).then(function(d){ if(d){CFG=d; applyAspect();} });
+var pad=document.getElementById('pad'), dot=document.getElementById('dot');
+function applyAspect(){ /* pad fills the screen; mapping uses its live rect */ }
 
-  <div id="status">Connecting&hellip;</div>
+// ---- touch pad -> POST /api/hand ----
+var lastSent=0, HINTS={fish:'Drag to guide the fish — they chase or flee your touch',
+  paint:'Drag to paint',constellation:'Drag to draw stars',flowers:'Drag to grow flowers',
+  driving:'Drag to steer',flowers2:''};
+function sendHand(clientX,clientY){
+  var r=pad.getBoundingClientRect();
+  var nx=Math.min(1,Math.max(0,(clientX-r.left)/r.width));
+  var ny=Math.min(1,Math.max(0,(clientY-r.top)/r.height));
+  dot.style.left=(nx*r.width)+'px'; dot.style.top=(ny*r.height)+'px'; dot.style.opacity=1;
+  var now=Date.now(); if(now-lastSent<33) return; lastSent=now;
+  fetch('/api/hand',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({x:nx*CFG.width, y:ny*CFG.playable_height})});
+}
+function releaseHand(){ dot.style.opacity=0;
+  fetch('/api/hand',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({x:null,y:null})}); }
+var active=false;
+pad.addEventListener('pointerdown',function(e){active=true;pad.setPointerCapture(e.pointerId);sendHand(e.clientX,e.clientY);});
+pad.addEventListener('pointermove',function(e){if(active)sendHand(e.clientX,e.clientY);});
+pad.addEventListener('pointerup',function(){active=false;releaseHand();});
+pad.addEventListener('pointercancel',function(){active=false;releaseHand();});
 
-  <script src="/static/controller.js"></script>
+// ---- pac-man ----
+var touchEl=document.getElementById('touch'), pacEl=document.getElementById('pac');
+var toggle=document.getElementById('toggle'), board=document.getElementById('board');
+Array.prototype.forEach.call(document.querySelectorAll('.dpad button'),function(b){
+  b.addEventListener('pointerdown',function(){ fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dir:b.getAttribute('data-dir')})}); });
+});
+document.getElementById('reset').onclick=function(){ fetch('/api/pmreset',{method:'POST'}); };
+var inControl=false;
+function refreshMode(){ fetch('/api/inputmode').then(function(r){return r.json();}).then(function(d){
+  inControl=(d&&d.mode==='controller'); toggle.classList.toggle('on',inControl);
+  toggle.textContent=inControl?'You have control':'Take control';
+  board.classList.toggle('live',inControl); }).catch(function(){}); }
+toggle.onclick=function(){ fetch('/api/inputmode',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({mode:inControl?'hand':'controller'})}).then(refreshMode); };
+function refreshScore(){ if(pacEl.style.display==='none')return; fetch('/api/pmstate').then(function(r){return r.json();}).then(function(d){
+  if(!d)return; document.getElementById('score').textContent=d.score; document.getElementById('level').textContent=d.level;
+  document.getElementById('lives').textContent=d.lives; }).catch(function(){}); }
+
+// ---- scene awareness ----
+var curScene=null;
+function loadScene(){ fetch('/api/scene').then(function(r){return r.json();}).then(function(d){
+  var sc=(d&&d.scene)||'fish'; if(sc===curScene)return; curScene=sc;
+  document.getElementById('sceneName').textContent=sc;
+  var isPac=(sc==='pacman');
+  pacEl.style.display=isPac?'flex':'none'; touchEl.style.display=isPac?'none':'flex';
+  document.getElementById('padhint').textContent=HINTS[sc]||'Touch & drag on the pad';
+  if(isPac) refreshMode();
+}).catch(function(){}); }
+loadScene(); setInterval(loadScene,1500); setInterval(refreshScore,600);
+</script>
 </body>
 </html>

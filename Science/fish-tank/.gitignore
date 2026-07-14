@@ -7,3 +7,11 @@ add_fish.log
 sprites/*.png
 inbox/*
 !inbox/.gitkeep
+.fish_alerts.json
+models/
+
+# camera/kiosk runtime state, logs, debug frames, and timestamped backups
+*.log
+*.bak*
+debug_frame*.jpg
+kiosk_state.json

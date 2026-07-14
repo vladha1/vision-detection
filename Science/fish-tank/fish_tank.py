@@ -63,6 +63,7 @@ class WallTracker(threading.Thread):
         )
         self.lock = threading.Lock()
         self.hand_point = None
+        self.latest_frame = None
         self.running = True
 
     @staticmethod
@@ -107,6 +108,8 @@ class WallTracker(threading.Thread):
                 ok, frame = self.cap.read()
                 if not ok:
                     continue
+                with self.lock:
+                    self.latest_frame = frame
                 crop, off_x, off_y, scale = self._crop_and_scale(frame)
 
                 rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
@@ -148,6 +151,10 @@ class WallTracker(threading.Thread):
     def get_hand(self):
         with self.lock:
             return self.hand_point
+
+    def get_frame(self):
+        with self.lock:
+            return None if self.latest_frame is None else self.latest_frame.copy()
 
     def stop(self):
         self.running = False

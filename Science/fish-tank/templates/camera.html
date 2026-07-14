@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fish Tank Camera</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0e1420;
+    --panel: #171f30;
+    --panel-2: #1f2a40;
+    --accent: #4fb3ff;
+    --text: #e8edf5;
+    --muted: #8b97ab;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: linear-gradient(180deg, var(--bg), #0a0f18);
+    color: var(--text);
+    margin: 0;
+    padding: 16px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; gap: 10px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: 0.2px; }
+  a.back { color: var(--accent); text-decoration: none; font-size: 14px; }
+  .stage {
+    flex: 1;
+    background: var(--panel);
+    border: 1px solid #263049;
+    border-radius: 14px;
+    padding: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    min-height: 0;
+  }
+  .stage img {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 8px;
+    display: block;
+    background: #0a2846;
+  }
+  .stage .offline { color: var(--muted); font-size: 14px; text-align: center; }
+  .hint { color: var(--muted); font-size: 13px; text-align: center; margin-top: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Fish Tank Camera</h1>
+  <a class="back" href="/admin">&larr; Admin</a>
+</header>
+
+<div class="stage">
+  <img id="feed" src="/camera/feed" alt="live camera"
+       onerror="this.style.display='none';document.getElementById('off').style.display='block';">
+  <div id="off" class="offline" style="display:none">Camera feed unavailable &mdash; is the tracker running?</div>
+</div>
+
+<div class="hint">Live view from the wall-tracking camera</div>
+</body>
+</html>

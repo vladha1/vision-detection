@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>Fish-tank kiosk</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  iframe { border: 0; width: 100vw; height: 100vh; display: block; }
+</style>
+</head>
+<body>
+<iframe id="f" src="about:blank" allow="fullscreen"></iframe>
+<script>
+  // Self-updating kiosk page: polls the admin-set URL for this device and shows
+  // it in a full-screen iframe, swapping when it changes. Keep this tab open
+  // (Add to Home Screen / Guided Access on the iPad).
+  var DEVICE = {{ device|tojson }};
+  var cur = null;
+  var frame = document.getElementById('f');
+  function poll() {
+    fetch('/api/kiosk?device=' + encodeURIComponent(DEVICE), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var u = (d && d.url) || '/';
+        if (u !== cur) { cur = u; frame.src = u; }
+      })
+      .catch(function () {});
+  }
+  poll();
+  setInterval(poll, 5000);
+</script>
+</body>
+</html>

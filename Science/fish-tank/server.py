@@ -4,9 +4,12 @@ import tempfile
 import threading
 import time
 import uuid
+import logging
+import random
 
+import cv2
 import numpy as np
-from flask import Flask, jsonify, request, send_from_directory, render_template
+from flask import Flask, jsonify, request, send_from_directory, render_template, Response
 
 from cutout import process_drawing
 from fish_tank import WallTracker
@@ -18,6 +21,8 @@ SCENE_STATE_PATH = os.path.join(BASE_DIR, "scene_state.json")
 CALIBRATION_PATH = os.path.join(BASE_DIR, "calibration.json")
 
 MAX_FISH = 20
+POOL_CAP = 100        # all uploaded fish stay in the pool up to this
+TANK_CAPACITY = 12    # how many swim at once; rotated over time
 # Was 0.8 to exclude the Mac's dock/menu bar when the projector mirrored the
 # desktop; not needed now that the tank runs as its own fullscreen browser page.
 PLAYABLE_HEIGHT_FRAC = 1.0
@@ -85,9 +90,77 @@ PLAYABLE_HEIGHT = int(PROJECTOR_SIZE[1] * PLAYABLE_HEIGHT_FRAC)
 tracker = WallTracker(calib["camera_index"], homography, calib.get("camera_points"))
 tracker.start()
 
+try:
+    import fish_alerts
+    fish_alerts.start(tracker.get_frame)
+except Exception as _e:
+    print("[fish-alerts] not started:", _e)
+
 roster = load_state()
 if not os.path.exists(STATE_PATH):
     save_state()
+
+
+# Fish temperaments (attract/repel) are randomised at startup and reshuffled
+# every few hours, so behaviour drifts on its own - no manual per-fish control.
+def _shuffle_temperaments():
+    def shuffle():
+        with state_lock:
+            for _e in roster:
+                _e["temperament"] = random.choice(("seek", "flee"))
+            save_state()
+    shuffle()
+    while True:
+        time.sleep(random.uniform(2 * 3600, 4 * 3600))
+        shuffle()
+        print("[fishtank] temperaments reshuffled")
+
+
+threading.Thread(target=_shuffle_temperaments, daemon=True).start()
+
+
+# Only a rotating subset of the pool swims at once; a background thread swaps a
+# few in/out every few minutes so fish come and go on their own.
+active_lock = threading.Lock()
+active_ids = []
+
+
+def _reset_active():
+    ids = [e["id"] for e in roster]
+    random.shuffle(ids)
+    with active_lock:
+        active_ids[:] = ids[:TANK_CAPACITY]
+
+
+def active_roster():
+    with active_lock:
+        aset = set(active_ids)
+    with state_lock:
+        return [e for e in roster if e["id"] in aset]
+
+
+def _rotate_pool():
+    _reset_active()
+    while True:
+        time.sleep(random.uniform(150, 420))  # ~2.5 - 7 min
+        with state_lock:
+            all_ids = [e["id"] for e in roster]
+        with active_lock:
+            if len(all_ids) <= TANK_CAPACITY:
+                active_ids[:] = all_ids
+                continue
+            aset = set(active_ids)
+            inactive = [i for i in all_ids if i not in aset]
+            if not inactive:
+                continue
+            n = random.randint(1, min(3, len(active_ids), len(inactive)))
+            for o in random.sample(list(active_ids), n):
+                active_ids.remove(o)
+            random.shuffle(inactive)
+            active_ids.extend(inactive[:n])
+
+
+threading.Thread(target=_rotate_pool, daemon=True).start()
 
 current_scene = load_scene()
 scene_lock = threading.Lock()
@@ -105,9 +178,38 @@ pm_state = {"score": 0, "lives": 3, "level": 1}
 # arrow. Hand-gesture play only kicks in when explicitly switched to "hand".
 input_state = {"mode": "controller"}
 control_lock = threading.Lock()
+phone_hand = {"pt": None, "ts": 0.0}
+phone_hand_lock = threading.Lock()
+PHONE_HAND_TIMEOUT = 0.7  # s; a phone touch overrides the camera hand while fresh
 
 
 app = Flask(__name__)
+
+
+_MJPEG_SEP = b"--frame" + bytes((13, 10)) + b"Content-Type: image/jpeg" + bytes((13, 10, 13, 10))
+_MJPEG_TAIL = bytes((13, 10))
+
+
+def _camera_mjpeg():
+    """Live MJPEG built from the WallTracker's most recent camera frame."""
+    while True:
+        frame = tracker.get_frame()
+        if frame is not None:
+            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+            if ok:
+                yield _MJPEG_SEP + buf.tobytes() + _MJPEG_TAIL
+        time.sleep(1.0 / 15)
+
+
+@app.route("/camera")
+def camera():
+    return render_template("camera.html")
+
+
+@app.route("/camera/feed")
+def camera_feed():
+    return Response(_camera_mjpeg(),
+                    mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
 @app.route("/")
@@ -161,14 +263,31 @@ def api_scene_set():
 
 @app.route("/api/hand")
 def api_hand():
-    # While the phone controller is the chosen input, don't recognize the hand
-    # at all on the Pac-Man scene - the phone is in charge.
+    # Pac-Man in controller mode uses the arrow pad, not a hand position.
     if current_scene == "pacman" and input_state["mode"] == "controller":
         return jsonify(None)
-    hand = tracker.get_hand()
+    # A recent phone touch overrides the camera hand for every other scene.
+    with phone_hand_lock:
+        pt, ts = phone_hand["pt"], phone_hand["ts"]
+    if pt is not None and (time.time() - ts) < PHONE_HAND_TIMEOUT:
+        hand = pt
+    else:
+        hand = tracker.get_hand()
     if hand is not None and hand[1] > PLAYABLE_HEIGHT:
         hand = None
     return jsonify({"x": hand[0], "y": hand[1]} if hand else None)
+
+
+@app.route("/api/hand", methods=["POST"])
+def api_hand_set():
+    data = request.get_json(force=True, silent=True) or {}
+    with phone_hand_lock:
+        if data.get("x") is None or data.get("y") is None:
+            phone_hand["pt"] = None
+        else:
+            phone_hand["pt"] = (float(data["x"]), float(data["y"]))
+        phone_hand["ts"] = time.time()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/control", methods=["POST"])
@@ -240,8 +359,13 @@ def api_pmstate_get():
 
 @app.route("/api/fish")
 def api_fish_list():
+    return jsonify(active_roster())
+
+
+@app.route("/api/pool")
+def api_pool_list():
     with state_lock:
-        return jsonify(roster)
+        return jsonify(list(roster))
 
 
 @app.route("/api/fish", methods=["POST"])
@@ -274,13 +398,17 @@ def api_fish_upload():
     }
     with state_lock:
         roster.append(entry)
-        while len(roster) > MAX_FISH:
+        while len(roster) > POOL_CAP:
             oldest = roster.pop(0)
             if oldest.get("kind") == "image":
                 old_path = os.path.join(SPRITES_DIR, oldest["filename"])
                 if os.path.exists(old_path):
                     os.remove(old_path)
         save_state()
+    with active_lock:
+        active_ids.append(fish_id)
+        while len(active_ids) > TANK_CAPACITY:
+            active_ids.pop(0)
     return jsonify(entry), 201
 
 
@@ -312,6 +440,65 @@ def api_fish_delete(fish_id):
                 save_state()
                 return jsonify({"ok": True})
     return jsonify({"error": "not found"}), 404
+
+
+# --- Kiosk display control (per device: pi reads over Tailscale, ipad via /kioskview) ---
+KIOSK_STATE_PATH = os.path.join(BASE_DIR, "kiosk_state.json")
+KIOSK_DEFAULTS = {"pi": "http://m4:5050/", "ipad": "/"}
+
+
+def _load_kiosk_state():
+    try:
+        if os.path.exists(KIOSK_STATE_PATH):
+            data = json.load(open(KIOSK_STATE_PATH))
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def kiosk_url_for(device):
+    return _load_kiosk_state().get(device) or KIOSK_DEFAULTS.get(device, "/")
+
+
+@app.route("/api/kiosk")
+def api_kiosk_get():
+    device = request.args.get("device", "pi")
+    return jsonify({"device": device, "url": kiosk_url_for(device)})
+
+
+@app.route("/api/kiosk", methods=["POST"])
+def api_kiosk_set():
+    data = request.get_json(force=True, silent=True) or {}
+    device = (data.get("device") or "pi").strip()
+    url = (data.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "url required"}), 400
+    state = _load_kiosk_state()
+    state[device] = url
+    with open(KIOSK_STATE_PATH, "w") as f:
+        json.dump(state, f)
+    return jsonify({"device": device, "url": url})
+
+
+@app.route("/kioskview")
+def kioskview():
+    return render_template("kioskview.html", device=request.args.get("device", "ipad"))
+
+
+# Quiet the Werkzeug access log for the endpoints polled many times a second
+# (tank/controller: /api/hand, /api/control, ...). Page loads + errors still log.
+class _QuietPolls(logging.Filter):
+    NOISY = ("/api/hand", "/api/control", "/api/scene", "/api/pmstate",
+             "/api/inputmode", "/api/kiosk", "/api/fish", "/api/pool")
+
+    def filter(self, record):
+        msg = record.getMessage()
+        return not any(p in msg for p in self.NOISY)
+
+
+logging.getLogger("werkzeug").addFilter(_QuietPolls())
 
 
 if __name__ == "__main__":
