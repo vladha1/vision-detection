@@ -1,0 +1,10 @@
+# Normalise line endings: store text as LF in the repo and check it out as LF
+# everywhere. Editing on Windows and running on the Mac then stop producing the
+# CRLF/LF churn that showed files as "modified" on every pull.
+* text=auto eol=lf
+
+# Binary assets git must never line-ending-convert
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.ico  binary
