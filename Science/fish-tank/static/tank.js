@@ -353,14 +353,14 @@ function randomKind() {
 
 // Green foliage that grows alongside the blooms (teamLab "Flower Forest" feel).
 const LEAF_COLORS = ['#2f8f4e', '#3fa34d', '#4caf50', '#2e7d4f', '#57b368'];
-function randomLeaves(min = 2, max = 3) {
+function randomLeaves(min = 2, max = 4) {
   const n = min + Math.floor(Math.random() * (max - min + 1));
   const leaves = [];
   for (let i = 0; i < n; i++) {
     leaves.push({
       angle: Math.random() * Math.PI * 2,
-      len: 0.9 + Math.random() * 0.8,     // multiple of the flower radius
-      width: 0.26 + Math.random() * 0.14,
+      len: 1.2 + Math.random() * 1.1,     // multiple of the flower radius - larger, reads from afar
+      width: 0.32 + Math.random() * 0.18,
       color: LEAF_COLORS[Math.floor(Math.random() * LEAF_COLORS.length)],
     });
   }
@@ -408,6 +408,43 @@ function lerpColor(hexA, hexB, t) {
   const a = hexToRgb(hexA), b = hexToRgb(hexB);
   return `rgb(${Math.round(a.r + (b.r - a.r) * t)},${Math.round(a.g + (b.g - a.g) * t)},${Math.round(a.b + (b.b - a.b) * t)})`;
 }
+
+// Rotate a hex colour's hue by `deg` degrees - used for the garden's slow
+// seasonal colour drift, so the whole palette shifts over time.
+function hueShift(hex, deg) {
+  let { r, g, b } = hexToRgb(hex);
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s, l = (max + min) / 2;
+  if (max === min) { h = s = 0; }
+  else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h /= 6;
+  }
+  h = (h + deg / 360) % 1; if (h < 0) h += 1;
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1; if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  let R, G, B;
+  if (s === 0) { R = G = B = l; }
+  else {
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    R = hue2rgb(p, q, h + 1 / 3); G = hue2rgb(p, q, h); B = hue2rgb(p, q, h - 1 / 3);
+  }
+  return `#${[R, G, B].map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join('')}`;
+}
+
+// Season phase advances ~one full hue cycle every 20 minutes.
+function seasonHue(now) { return (now * 0.3) % 360; }
 
 function drawFlowerFace(r, face) {
   const eyeX = r * 0.11;
@@ -523,8 +560,8 @@ function drawIntro(now) {
 
 // --- persistent "flowers" scene: a continuously blooming/fading garden,
 // selectable from the admin page instead of the fish tank.
-const GARDEN_TARGET_COUNT = 150;
-const GARDEN_MAX_COUNT = 260; // safety cap so a lingering hand can't spawn forever
+const GARDEN_TARGET_COUNT = 300; // wall-filling density (teamLab Flower Forest feel)
+const GARDEN_MAX_COUNT = 460; // safety cap so a lingering hand can't spawn forever
 const GARDEN_BLOOM_SECONDS = 2.0;
 const GARDEN_SPAWN_CHECK_SECONDS = 0.15;
 const WOBBLE_RADIUS = 380;    // how far a hand's presence reaches into the garden
@@ -558,13 +595,13 @@ function makeGardenFlower(now, x, y) {
     x, y,
     maxRadius: 14 + Math.random() * 62, // wide size range - tiny buds to big blooms
     petals: 5 + Math.floor(Math.random() * 3),
-    color: FLOWER_COLORS[Math.floor(Math.random() * FLOWER_COLORS.length)],
+    color: hueShift(FLOWER_COLORS[Math.floor(Math.random() * FLOWER_COLORS.length)], seasonHue(now)),
     kind: randomKind(),
     rotation: Math.random() * Math.PI * 2,
     wobbleSeed: Math.random() * Math.PI * 2,
     bornAt: now,
-    hold: 2.5 + Math.random() * 3,
-    fade: 1.6 + Math.random() * 1.0,
+    hold: 14 + Math.random() * 22,   // linger long so the wall stays densely full
+    fade: 2.5 + Math.random() * 2.0,
     leaves: randomLeaves(),
   };
 }
@@ -764,7 +801,7 @@ function makePetal(y) {
 }
 function initPetals() {
   petals = [];
-  for (let i = 0; i < 40; i++) petals.push(makePetal(Math.random() * H));
+  for (let i = 0; i < 75; i++) petals.push(makePetal(Math.random() * H));
 }
 function drawPetals(now, dt) {
   ctx.globalAlpha = 0.55;
@@ -855,25 +892,25 @@ function drawGrass(now) {
 let vines = [];
 function initVines() {
   vines = [];
-  const count = Math.max(6, Math.floor(W / 240));
+  const count = Math.max(10, Math.floor(W / 150)); // more vines across the wall
   for (let i = 0; i < count; i++) {
     const segs = 10;
-    const leafCount = 4 + Math.floor(Math.random() * 4);
+    const leafCount = 6 + Math.floor(Math.random() * 5);
     const leaves = [];
     for (let l = 0; l < leafCount; l++) {
       leaves.push({
-        t: 0.25 + Math.random() * 0.7,     // position up the vine
+        t: 0.15 + Math.random() * 0.8,     // position up the vine
         side: Math.random() < 0.5 ? 1 : -1,
-        size: 12 + Math.random() * 16,
+        size: 18 + Math.random() * 24,     // bigger leaves, visible from across the room
         color: LEAF_COLORS[Math.floor(Math.random() * LEAF_COLORS.length)],
       });
     }
     vines.push({
-      x: (i + 0.5) / count * W + (Math.random() - 0.5) * 130,
-      height: 200 + Math.random() * 280,
+      x: (i + 0.5) / count * W + (Math.random() - 0.5) * 110,
+      height: 300 + Math.random() * 360,   // taller - climb most of the wall
       sway: 16 + Math.random() * 18,
       phase: Math.random() * Math.PI * 2,
-      width: 3 + Math.random() * 3,
+      width: 4 + Math.random() * 4,
       color: LEAF_COLORS[Math.floor(Math.random() * LEAF_COLORS.length)],
       segs,
       leaves,
@@ -1035,7 +1072,7 @@ function drawFlowerScene(now, dt) {
 
   if (gardenFlowers.length < GARDEN_TARGET_COUNT && now - lastGardenSpawnCheck > GARDEN_SPAWN_CHECK_SECONDS) {
     lastGardenSpawnCheck = now;
-    if (Math.random() < 0.6) spawnGardenFlower(now);
+    for (let s = 0; s < 3; s++) if (Math.random() < 0.7) spawnGardenFlower(now); // bloom several at once so the wall fills quickly
   }
 
   if (hand && hand.y > H - GRASS_ZONE_HEIGHT && now - lastGrassTouchCheck > GRASS_TOUCH_CHECK_SECONDS) {
